@@ -125,7 +125,9 @@ class ArcadeControlApp:
     
     def __init__(self):
         """Initialize application"""
-        pygame.init()
+        # Initialize pygame without audio (no sound card available)
+        pygame.display.init()
+        pygame.font.init()
         
         # Load configuration
         self.config = Config()
