@@ -1,0 +1,21 @@
+[Unit]
+Description=Arcade Control Panel
+After=local-fs.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/root/arcade-control
+ExecStart=/usr/bin/python3 /root/arcade-control/src/main.py
+Restart=on-failure
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+# Environment
+Environment=SDL_VIDEODRIVER=fbcon
+Environment=SDL_FBDEV=/dev/fb0
+Environment=SDL_NOMOUSE=1
+
+[Install]
+WantedBy=multi-user.target
