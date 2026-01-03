@@ -129,13 +129,17 @@ class ArcadeControlApp:
         pygame.display.init()
         pygame.font.init()
         
+        print(f"SDL Video Driver: {pygame.display.get_driver()}")
+        
         # Load configuration
         self.config = Config()
         
         # Screen setup
         self.width = self.config['screen_width']
         self.height = self.config['screen_height']
+        print(f"Creating display: {self.width}x{self.height}")
         self.screen = pygame.display.set_mode((self.width, self.height), pygame.FULLSCREEN)
+        print("Display created successfully")
         pygame.display.set_caption("CYBER//ARCADE Control")
         
         # Fonts - Use Rajdhani for cyberpunk look
