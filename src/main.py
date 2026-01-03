@@ -17,8 +17,8 @@ from gpio_controller import GPIOController
 from keyboard_mapper import ArcadeKeyMapper
 
 
-# Configure SDL for KMS/DRM (compatible with DietPi)
-os.environ['SDL_VIDEODRIVER'] = 'kmsdrm'
+# Configure SDL - let it choose the best available driver
+# os.environ['SDL_VIDEODRIVER'] = 'kmsdrm'
 os.environ['SDL_NOMOUSE'] = '1'
 
 # Cyberpunk color scheme
