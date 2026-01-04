@@ -1,7 +1,7 @@
 #!/bin/bash
 # Start application with X11
 
-# Create minimal xorg.conf for 1920x1080
+# Create minimal xorg.conf for 960x540
 cat > /tmp/xorg.conf << EOF
 Section "Monitor"
     Identifier "Monitor0"
@@ -13,7 +13,7 @@ Section "Screen"
     DefaultDepth 24
     SubSection "Display"
         Depth 24
-        Modes "1920x1080"
+        Modes "960x540"
     EndSubSection
 EndSection
 EOF
