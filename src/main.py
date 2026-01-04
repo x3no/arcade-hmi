@@ -556,6 +556,9 @@ class ArcadeControlApp:
         for event in pygame.event.get():
             if event.type == QUIT:
                 self.running = False
+            elif event.type == KEYDOWN:
+                if event.key == K_ESCAPE:
+                    self.running = False
             elif event.type == MOUSEBUTTONDOWN:
                 # If dialog is open, only handle dialog buttons
                 if self.confirmation_dialog:
