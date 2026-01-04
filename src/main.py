@@ -22,7 +22,7 @@ os.environ['SDL_VIDEODRIVER'] = 'x11'
 os.environ['SDL_NOMOUSE'] = '1'
 
 # Cyberpunk color scheme
-CYBER_BG = (10, 14, 39)          # Dark blue-black
+CYBER_BG = (0, 0, 0)             # Pure black for AMOLED
 CYBER_CYAN = (0, 255, 255)       # Bright cyan
 CYBER_MAGENTA = (255, 0, 255)    # Bright magenta
 CYBER_YELLOW = (255, 255, 0)     # Electric yellow
@@ -195,11 +195,11 @@ class ArcadeControlApp:
             [CYBER_MAGENTA, CYBER_CYAN, CYBER_GREEN]  # C, 0, OK with different colors
         ]
         
-        btn_width = 100
-        btn_height = 65
-        spacing = 12
+        btn_width = 240
+        btn_height = 160
+        spacing = 30
         start_x = (self.width - btn_width * 3 - spacing * 2) // 2
-        start_y = 150
+        start_y = 380
         
         for row_idx, row in enumerate(numpad_layout):
             for col_idx, label in enumerate(row):
@@ -215,14 +215,14 @@ class ArcadeControlApp:
                 self.numpad_buttons.append(btn)
         
         # Main control buttons with cyberpunk colors
-        btn_w = 180
-        btn_h = 80
-        spacing = 20
+        btn_w = 430
+        btn_h = 190
+        spacing = 50
         cols = 3
         rows = 3
         
         start_x = (self.width - (btn_w * cols + spacing * (cols - 1))) // 2
-        start_y = 100
+        start_y = 250
         
         actions = [
             ("VOL +", self.volume_up, CYBER_GREEN),

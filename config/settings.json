@@ -10,6 +10,6 @@
   "button_text_color": [255, 255, 255],
   "bg_color": [0, 0, 0],
   "text_color": [255, 255, 255],
-  "font_size": 32,
-  "font_size_large": 48
+  "font_size": 72,
+  "font_size_large": 108
 }
