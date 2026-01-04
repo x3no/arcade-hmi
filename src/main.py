@@ -22,7 +22,7 @@ os.environ['SDL_VIDEODRIVER'] = 'x11'
 os.environ['SDL_NOMOUSE'] = '1'
 
 # Cyberpunk color scheme
-CYBER_BG = (0, 0, 0)             # Pure black for AMOLED
+CYBER_BG = (255, 0, 0)           # RED for debugging - see what's being drawn
 CYBER_CYAN = (0, 255, 255)       # Bright cyan
 CYBER_MAGENTA = (255, 0, 255)    # Bright magenta
 CYBER_YELLOW = (255, 255, 0)     # Electric yellow
