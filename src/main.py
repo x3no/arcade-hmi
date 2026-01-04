@@ -138,11 +138,7 @@ class ArcadeControlApp:
         self.width = self.config['screen_width']
         self.height = self.config['screen_height']
         print(f"Creating display: {self.width}x{self.height}")
-        
-        # Set SDL hint to scale the window
-        os.environ['SDL_VIDEO_MINIMIZE_ON_FOCUS_LOSS'] = '0'
-        
-        self.screen = pygame.display.set_mode((self.width, self.height), pygame.FULLSCREEN | pygame.SCALED)
+        self.screen = pygame.display.set_mode((self.width, self.height), pygame.FULLSCREEN)
         print("Display created successfully")
         pygame.display.set_caption("CYBER//ARCADE Control")
         
