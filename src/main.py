@@ -17,8 +17,8 @@ from gpio_controller import GPIOController
 from keyboard_mapper import ArcadeKeyMapper
 
 
-# Configure SDL - let it choose the best available driver
-# os.environ['SDL_VIDEODRIVER'] = 'kmsdrm'
+# Configure SDL to use X11
+os.environ['SDL_VIDEODRIVER'] = 'x11'
 os.environ['SDL_NOMOUSE'] = '1'
 
 # Cyberpunk color scheme
