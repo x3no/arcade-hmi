@@ -364,31 +364,28 @@ class ArcadeControlApp:
     
     def draw_cyberpunk_bg(self):
         """Draw cyberpunk background effects"""
-        # Scanline effect
-        self.scanline_offset = (self.scanline_offset + 1) % 4
-        for i in range(self.scanline_offset, self.height, 4):
-            pygame.draw.line(self.screen, (15, 20, 45), (0, i), (self.width, i), 1)
+        # No scanlines for AMOLED - keep it pure black
         
-        # Corner decorations
+        # Corner decorations (subtle)
         corner_color = CYBER_CYAN
-        corner_size = 40
-        corner_thickness = 3
+        corner_size = 80
+        corner_thickness = 2
         
         # Top-left
-        pygame.draw.line(self.screen, corner_color, (10, 10), (10 + corner_size, 10), corner_thickness)
-        pygame.draw.line(self.screen, corner_color, (10, 10), (10, 10 + corner_size), corner_thickness)
+        pygame.draw.line(self.screen, corner_color, (20, 20), (20 + corner_size, 20), corner_thickness)
+        pygame.draw.line(self.screen, corner_color, (20, 20), (20, 20 + corner_size), corner_thickness)
         
         # Top-right
-        pygame.draw.line(self.screen, corner_color, (self.width - 10, 10), (self.width - 10 - corner_size, 10), corner_thickness)
-        pygame.draw.line(self.screen, corner_color, (self.width - 10, 10), (self.width - 10, 10 + corner_size), corner_thickness)
+        pygame.draw.line(self.screen, corner_color, (self.width - 20, 20), (self.width - 20 - corner_size, 20), corner_thickness)
+        pygame.draw.line(self.screen, corner_color, (self.width - 20, 20), (self.width - 20, 20 + corner_size), corner_thickness)
         
         # Bottom-left
-        pygame.draw.line(self.screen, corner_color, (10, self.height - 10), (10 + corner_size, self.height - 10), corner_thickness)
-        pygame.draw.line(self.screen, corner_color, (10, self.height - 10), (10, self.height - 10 - corner_size), corner_thickness)
+        pygame.draw.line(self.screen, corner_color, (20, self.height - 20), (20 + corner_size, self.height - 20), corner_thickness)
+        pygame.draw.line(self.screen, corner_color, (20, self.height - 20), (20, self.height - 20 - corner_size), corner_thickness)
         
         # Bottom-right
-        pygame.draw.line(self.screen, corner_color, (self.width - 10, self.height - 10), (self.width - 10 - corner_size, self.height - 10), corner_thickness)
-        pygame.draw.line(self.screen, corner_color, (self.width - 10, self.height - 10), (self.width - 10, self.height - 10 - corner_size), corner_thickness)
+        pygame.draw.line(self.screen, corner_color, (self.width - 20, self.height - 20), (self.width - 20 - corner_size, self.height - 20), corner_thickness)
+        pygame.draw.line(self.screen, corner_color, (self.width - 20, self.height - 20), (self.width - 20, self.height - 20 - corner_size), corner_thickness)
     
     def draw_lock_screen_base(self):
         """Draw lock screen content without flip"""
@@ -403,11 +400,11 @@ class ArcadeControlApp:
         # Title with glitch effect
         title_text = ">> ACCESS CONTROL <<"
         title = self.font_large.render(title_text, True, CYBER_CYAN)
-        title_rect = title.get_rect(center=(self.width // 2, 70))
+        title_rect = title.get_rect(center=(self.width // 2, 150))
         
         # Glow effect
         glow = self.font_large.render(title_text, True, (*CYBER_CYAN, 128))
-        for offset in [(2, 2), (-2, -2)]:
+        for offset in [(4, 4), (-4, -4)]:
             glow_rect = title_rect.copy()
             glow_rect.x += offset[0]
             glow_rect.y += offset[1]
@@ -417,14 +414,14 @@ class ArcadeControlApp:
         
         # Subtitle
         subtitle = self.font.render("ENTER PIN CODE", True, CYBER_MAGENTA)
-        subtitle_rect = subtitle.get_rect(center=(self.width // 2, 105))
+        subtitle_rect = subtitle.get_rect(center=(self.width // 2, 260))
         self.screen.blit(subtitle, subtitle_rect)
         
         # PIN display with box
-        pin_box_width = 200
-        pin_box_height = 50
+        pin_box_width = 480
+        pin_box_height = 120
         pin_box_x = (self.width - pin_box_width) // 2
-        pin_box_y = 130
+        pin_box_y = 310
         
         pygame.draw.rect(self.screen, CYBER_DARK, (pin_box_x, pin_box_y, pin_box_width, pin_box_height))
         pygame.draw.rect(self.screen, CYBER_CYAN, (pin_box_x, pin_box_y, pin_box_width, pin_box_height), 2)
@@ -453,10 +450,10 @@ class ArcadeControlApp:
         # Title with cyberpunk style
         title_text = "// CYBER ARCADE CONTROL //"
         title = self.font_large.render(title_text, True, CYBER_CYAN)
-        title_rect = title.get_rect(center=(self.width // 2, 35))
+        title_rect = title.get_rect(center=(self.width // 2, 90))
         
         # Glow
-        for offset in [(1, 1), (-1, -1), (2, 0), (-2, 0)]:
+        for offset in [(3, 3), (-3, -3), (4, 0), (-4, 0)]:
             glow = self.font_large.render(title_text, True, (*CYBER_CYAN, 80))
             glow_rect = title_rect.copy()
             glow_rect.x += offset[0]
