@@ -59,13 +59,13 @@ class CyberButton:
         
         # Draw outer glow
         if self.glow_intensity > 0:
-            glow_surface = pygame.Surface((self.rect.width + 20, self.rect.height + 20), pygame.SRCALPHA)
+            glow_surface = pygame.Surface((self.rect.width + 10, self.rect.height + 10), pygame.SRCALPHA)
             glow_color = (*self.color, int(80 * self.glow_intensity * pulse))
-            pygame.draw.rect(glow_surface, glow_color, glow_surface.get_rect(), border_radius=15)
-            surface.blit(glow_surface, (self.rect.x - 10, self.rect.y - 10))
+            pygame.draw.rect(glow_surface, glow_color, glow_surface.get_rect(), border_radius=8)
+            surface.blit(glow_surface, (self.rect.x - 5, self.rect.y - 5))
         
         # Draw main button with corner cuts (cyberpunk style)
-        corner_size = 8
+        corner_size = 4
         points = [
             (self.rect.x + corner_size, self.rect.y),
             (self.rect.right - corner_size, self.rect.y),
@@ -86,11 +86,11 @@ class CyberButton:
         pygame.draw.polygon(surface, border_color, points, 3)
         
         # Scanline effect
-        for i in range(0, self.rect.height, 4):
+        for i in range(0, self.rect.height, 2):
             line_alpha = 30
-            line_surf = pygame.Surface((self.rect.width - 16, 1), pygame.SRCALPHA)
+            line_surf = pygame.Surface((self.rect.width - 8, 1), pygame.SRCALPHA)
             line_surf.fill((255, 255, 255, line_alpha))
-            surface.blit(line_surf, (self.rect.x + 8, self.rect.y + i))
+            surface.blit(line_surf, (self.rect.x + 4, self.rect.y + i))
         
         # Text with glow
         text_color = tuple(min(255, int(c * (1.2 if self.is_hovered else 1.0))) for c in self.color)
@@ -102,8 +102,8 @@ class CyberButton:
             shadow_surf = font.render(self.text, True, (*self.color[:3], 128))
             for offset in [(1, 1), (-1, -1), (1, -1), (-1, 1)]:
                 shadow_rect = text_rect.copy()
-                shadow_rect.x += offset[0] * 2
-                shadow_rect.y += offset[1] * 2
+                shadow_rect.x += offset[0]
+                shadow_rect.y += offset[1]
                 surface.blit(shadow_surf, shadow_rect)
         
         surface.blit(text_surf, text_rect)
@@ -145,12 +145,12 @@ class ArcadeControlApp:
         # Fonts - Use Rajdhani for cyberpunk look
         try:
             font_path = os.path.join(os.path.dirname(__file__), 'fonts', 'Rajdhani-Bold.ttf')
-            self.font = pygame.font.Font(font_path, 32)
-            self.font_large = pygame.font.Font(font_path, 52)
+            self.font = pygame.font.Font(font_path, 16)
+            self.font_large = pygame.font.Font(font_path, 26)
         except:
             # Fallback to default
-            self.font = pygame.font.Font(None, 32)
-            self.font_large = pygame.font.Font(None, 48)
+            self.font = pygame.font.Font(None, 16)
+            self.font_large = pygame.font.Font(None, 24)
         
         # Cyberpunk colors
         self.bg_color = CYBER_BG
@@ -195,11 +195,11 @@ class ArcadeControlApp:
             [CYBER_MAGENTA, CYBER_CYAN, CYBER_GREEN]  # C, 0, OK with different colors
         ]
         
-        btn_width = 240
-        btn_height = 160
-        spacing = 30
+        btn_width = 120
+        btn_height = 80
+        spacing = 15
         start_x = (self.width - btn_width * 3 - spacing * 2) // 2
-        start_y = 380
+        start_y = 190
         
         for row_idx, row in enumerate(numpad_layout):
             for col_idx, label in enumerate(row):
@@ -215,14 +215,14 @@ class ArcadeControlApp:
                 self.numpad_buttons.append(btn)
         
         # Main control buttons with cyberpunk colors
-        btn_w = 430
-        btn_h = 190
-        spacing = 50
+        btn_w = 215
+        btn_h = 95
+        spacing = 25
         cols = 3
         rows = 3
         
         start_x = (self.width - (btn_w * cols + spacing * (cols - 1))) // 2
-        start_y = 250
+        start_y = 125
         
         actions = [
             ("VOL +", self.volume_up, CYBER_GREEN),
@@ -368,24 +368,24 @@ class ArcadeControlApp:
         
         # Corner decorations (subtle)
         corner_color = CYBER_CYAN
-        corner_size = 80
-        corner_thickness = 2
+        corner_size = 40
+        corner_thickness = 1
         
         # Top-left
-        pygame.draw.line(self.screen, corner_color, (20, 20), (20 + corner_size, 20), corner_thickness)
-        pygame.draw.line(self.screen, corner_color, (20, 20), (20, 20 + corner_size), corner_thickness)
+        pygame.draw.line(self.screen, corner_color, (10, 10), (10 + corner_size, 10), corner_thickness)
+        pygame.draw.line(self.screen, corner_color, (10, 10), (10, 10 + corner_size), corner_thickness)
         
         # Top-right
-        pygame.draw.line(self.screen, corner_color, (self.width - 20, 20), (self.width - 20 - corner_size, 20), corner_thickness)
-        pygame.draw.line(self.screen, corner_color, (self.width - 20, 20), (self.width - 20, 20 + corner_size), corner_thickness)
+        pygame.draw.line(self.screen, corner_color, (self.width - 10, 10), (self.width - 10 - corner_size, 10), corner_thickness)
+        pygame.draw.line(self.screen, corner_color, (self.width - 10, 10), (self.width - 10, 10 + corner_size), corner_thickness)
         
         # Bottom-left
-        pygame.draw.line(self.screen, corner_color, (20, self.height - 20), (20 + corner_size, self.height - 20), corner_thickness)
-        pygame.draw.line(self.screen, corner_color, (20, self.height - 20), (20, self.height - 20 - corner_size), corner_thickness)
+        pygame.draw.line(self.screen, corner_color, (10, self.height - 10), (10 + corner_size, self.height - 10), corner_thickness)
+        pygame.draw.line(self.screen, corner_color, (10, self.height - 10), (10, self.height - 10 - corner_size), corner_thickness)
         
         # Bottom-right
-        pygame.draw.line(self.screen, corner_color, (self.width - 20, self.height - 20), (self.width - 20 - corner_size, self.height - 20), corner_thickness)
-        pygame.draw.line(self.screen, corner_color, (self.width - 20, self.height - 20), (self.width - 20, self.height - 20 - corner_size), corner_thickness)
+        pygame.draw.line(self.screen, corner_color, (self.width - 10, self.height - 10), (self.width - 10 - corner_size, self.height - 10), corner_thickness)
+        pygame.draw.line(self.screen, corner_color, (self.width - 10, self.height - 10), (self.width - 10, self.height - 10 - corner_size), corner_thickness)
     
     def draw_lock_screen_base(self):
         """Draw lock screen content without flip"""
@@ -400,11 +400,11 @@ class ArcadeControlApp:
         # Title with glitch effect
         title_text = ">> ACCESS CONTROL <<"
         title = self.font_large.render(title_text, True, CYBER_CYAN)
-        title_rect = title.get_rect(center=(self.width // 2, 150))
+        title_rect = title.get_rect(center=(self.width // 2, 75))
         
         # Glow effect
         glow = self.font_large.render(title_text, True, (*CYBER_CYAN, 128))
-        for offset in [(4, 4), (-4, -4)]:
+        for offset in [(2, 2), (-2, -2)]:
             glow_rect = title_rect.copy()
             glow_rect.x += offset[0]
             glow_rect.y += offset[1]
@@ -414,14 +414,14 @@ class ArcadeControlApp:
         
         # Subtitle
         subtitle = self.font.render("ENTER PIN CODE", True, CYBER_MAGENTA)
-        subtitle_rect = subtitle.get_rect(center=(self.width // 2, 260))
+        subtitle_rect = subtitle.get_rect(center=(self.width // 2, 130))
         self.screen.blit(subtitle, subtitle_rect)
         
         # PIN display with box
-        pin_box_width = 480
-        pin_box_height = 120
+        pin_box_width = 240
+        pin_box_height = 60
         pin_box_x = (self.width - pin_box_width) // 2
-        pin_box_y = 310
+        pin_box_y = 155
         
         pygame.draw.rect(self.screen, CYBER_DARK, (pin_box_x, pin_box_y, pin_box_width, pin_box_height))
         pygame.draw.rect(self.screen, CYBER_CYAN, (pin_box_x, pin_box_y, pin_box_width, pin_box_height), 2)
@@ -450,10 +450,10 @@ class ArcadeControlApp:
         # Title with cyberpunk style
         title_text = "// CYBER ARCADE CONTROL //"
         title = self.font_large.render(title_text, True, CYBER_CYAN)
-        title_rect = title.get_rect(center=(self.width // 2, 90))
+        title_rect = title.get_rect(center=(self.width // 2, 45))
         
         # Glow
-        for offset in [(3, 3), (-3, -3), (4, 0), (-4, 0)]:
+        for offset in [(2, 2), (-2, -2), (2, 0), (-2, 0)]:
             glow = self.font_large.render(title_text, True, (*CYBER_CYAN, 80))
             glow_rect = title_rect.copy()
             glow_rect.x += offset[0]
@@ -465,7 +465,7 @@ class ArcadeControlApp:
         # Status line
         status_text = "[ SYSTEM ONLINE ]"
         status = self.font.render(status_text, True, CYBER_GREEN)
-        status_rect = status.get_rect(center=(self.width // 2, 65))
+        status_rect = status.get_rect(center=(self.width // 2, 33))
         self.screen.blit(status, status_rect)
         
         # Buttons
@@ -491,8 +491,8 @@ class ArcadeControlApp:
         self.screen.blit(overlay, (0, 0))
         
         # Dialog box with cyberpunk style
-        dialog_w = 450
-        dialog_h = 220
+        dialog_w = 225
+        dialog_h = 110
         dialog_x = (self.width - dialog_w) // 2
         dialog_y = (self.height - dialog_h) // 2
         
@@ -509,30 +509,30 @@ class ArcadeControlApp:
         pygame.draw.rect(self.screen, CYBER_CYAN, (dialog_x, dialog_y, dialog_w, dialog_h), 3)
         
         # Warning symbol
-        warning_y = dialog_y + 30
+        warning_y = dialog_y + 15
         pygame.draw.polygon(self.screen, CYBER_YELLOW, [
             (self.width // 2, warning_y),
-            (self.width // 2 - 15, warning_y + 25),
-            (self.width // 2 + 15, warning_y + 25)
+            (self.width // 2 - 8, warning_y + 13),
+            (self.width // 2 + 8, warning_y + 13)
         ])
-        pygame.draw.circle(self.screen, CYBER_DARK, (self.width // 2, warning_y + 15), 3)
-        pygame.draw.line(self.screen, CYBER_DARK, (self.width // 2, warning_y + 8), (self.width // 2, warning_y + 12), 2)
+        pygame.draw.circle(self.screen, CYBER_DARK, (self.width // 2, warning_y + 8), 2)
+        pygame.draw.line(self.screen, CYBER_DARK, (self.width // 2, warning_y + 4), (self.width // 2, warning_y + 6), 1)
         
         # Title
         title = self.font_large.render(self.confirmation_dialog['title'], True, CYBER_CYAN)
-        title_rect = title.get_rect(center=(self.width // 2, dialog_y + 80))
+        title_rect = title.get_rect(center=(self.width // 2, dialog_y + 40))
         self.screen.blit(title, title_rect)
         
         # Create buttons if not exist
         if not hasattr(self, 'dialog_yes_btn'):
             self.dialog_yes_btn = CyberButton(
-                (dialog_x + 60, dialog_y + 140, 140, 55),
+                (dialog_x + 30, dialog_y + 70, 70, 28),
                 "SÍ",
                 CYBER_GREEN,
                 None  # Action set dynamically
             )
             self.dialog_no_btn = CyberButton(
-                (dialog_x + 250, dialog_y + 140, 140, 55),
+                (dialog_x + 125, dialog_y + 70, 70, 28),
                 "NO",
                 CYBER_MAGENTA,
                 None  # Action set dynamically
