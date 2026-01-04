@@ -22,7 +22,7 @@ os.environ['SDL_VIDEODRIVER'] = 'x11'
 os.environ['SDL_NOMOUSE'] = '1'
 
 # Cyberpunk color scheme
-CYBER_BG = (255, 0, 0)           # RED for debugging - see what's being drawn
+CYBER_BG = (0, 0, 0)             # Pure black for AMOLED
 CYBER_CYAN = (0, 255, 255)       # Bright cyan
 CYBER_MAGENTA = (255, 0, 255)    # Bright magenta
 CYBER_YELLOW = (255, 255, 0)     # Electric yellow
@@ -145,12 +145,12 @@ class ArcadeControlApp:
         # Fonts - Use Rajdhani for cyberpunk look
         try:
             font_path = os.path.join(os.path.dirname(__file__), 'fonts', 'Rajdhani-Bold.ttf')
-            self.font = pygame.font.Font(font_path, 16)
-            self.font_large = pygame.font.Font(font_path, 26)
+            self.font = pygame.font.Font(font_path, 36)
+            self.font_large = pygame.font.Font(font_path, 54)
         except:
             # Fallback to default
-            self.font = pygame.font.Font(None, 16)
-            self.font_large = pygame.font.Font(None, 24)
+            self.font = pygame.font.Font(None, 36)
+            self.font_large = pygame.font.Font(None, 54)
         
         # Cyberpunk colors
         self.bg_color = CYBER_BG
