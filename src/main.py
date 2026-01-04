@@ -159,7 +159,7 @@ class ArcadeControlApp:
         # State
         self.running = True
         self.locked = True
-        self.screen_on = False
+        self.screen_on = True  # Start with screen on for testing
         self.pin_input = ""
         self.confirmation_dialog = None
         self.scanline_offset = 0
