@@ -876,6 +876,8 @@ class ArcadeControlApp:
             elif event.type == KEYDOWN:
                 if event.key == K_ESCAPE:
                     self.running = False
+                elif event.key == K_F1:
+                    self.do_update()
             elif event.type in (MOUSEBUTTONDOWN, MOUSEMOTION, MOUSEBUTTONUP):
                 # If dialog is open, only handle dialog buttons (no motion needed)
                 if self.confirmation_dialog:
