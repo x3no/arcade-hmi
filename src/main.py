@@ -31,23 +31,34 @@ C_WHITE  = (255, 255, 255)  # White
 C_GRAY   = (140, 140, 140)  # Mid gray
 C_DARK   = (20, 20, 20)     # Near-black for fills
 C_ORANGE = (255, 140, 0)    # Pressed state
+C_BTN    = (55,  55,  55)   # Action button background
 
 
 class SimpleButton:
     """Simple square button: black fill, white 3px border, white text."""
 
-    def __init__(self, rect, text, color=None, action=None):
+    def __init__(self, rect, text, color=None, action=None, icon=None):
         self.rect = pygame.Rect(rect)
         self.text = text
         self.action = action
         self.is_pressed = False
+        self.icon = icon
 
-    def draw(self, surface, font):
-        color = C_ORANGE if self.is_pressed else C_WHITE
-        pygame.draw.rect(surface, C_BG, self.rect)
-        pygame.draw.rect(surface, color, self.rect, 3)
-        text_surf = font.render(self.text, True, color)
-        surface.blit(text_surf, text_surf.get_rect(center=self.rect.center))
+    def draw(self, surface, font, font_icon=None):
+        bg = C_ORANGE if self.is_pressed else C_BTN
+        pygame.draw.rect(surface, bg, self.rect)
+        if self.icon and font_icon:
+            icon_surf = font_icon.render(self.icon, True, C_WHITE)
+            text_surf = font.render(self.text, True, C_WHITE)
+            gap       = 6
+            total_h   = icon_surf.get_height() + gap + text_surf.get_height()
+            top       = self.rect.centery - total_h // 2
+            surface.blit(icon_surf, icon_surf.get_rect(centerx=self.rect.centerx, top=top))
+            surface.blit(text_surf, text_surf.get_rect(centerx=self.rect.centerx,
+                                                        top=top + icon_surf.get_height() + gap))
+        else:
+            text_surf = font.render(self.text, True, C_WHITE)
+            surface.blit(text_surf, text_surf.get_rect(center=self.rect.center))
 
     def handle_event(self, event):
         if event.type == MOUSEBUTTONDOWN:
@@ -64,23 +75,50 @@ class SimpleButton:
 
 
 class TabButton:
-    """Tab/slot selector: active = white bg + black text, inactive = black bg + white border."""
+    """Tab/slot selector. style='underline' (main tabs) or style='box' (slot sub-tabs)."""
 
-    def __init__(self, rect, text, active=False, action=None):
+    def __init__(self, rect, text, active=False, action=None, icon=None, style='underline'):
         self.rect   = pygame.Rect(rect)
         self.text   = text
         self.active = active
         self.action = action
+        self.icon   = icon
+        self.style  = style
 
-    def draw(self, surface, font):
-        if self.active:
-            pygame.draw.rect(surface, C_WHITE, self.rect)
-            text_surf = font.render(self.text, True, C_BG)
+    def draw(self, surface, font, font_icon=None):
+        pygame.draw.rect(surface, C_BG, self.rect)
+
+        if self.style == 'box':
+            if self.active:
+                pygame.draw.rect(surface, C_WHITE, self.rect)
+                text_surf = font.render(self.text, True, C_BG)
+            else:
+                pygame.draw.rect(surface, C_GRAY, self.rect, 3)
+                text_surf = font.render(self.text, True, C_GRAY)
+            surface.blit(text_surf, text_surf.get_rect(center=self.rect.center))
+            return
+
+        # underline style
+        fg = C_WHITE if self.active else C_GRAY
+        if self.icon and font_icon:
+            icon_surf = font_icon.render(self.icon, True, fg)
+            text_surf = font.render(self.text, True, fg)
+            gap       = 8
+            total_w   = icon_surf.get_width() + gap + text_surf.get_width()
+            x         = self.rect.centerx - total_w // 2
+            cy        = self.rect.centery
+            surface.blit(icon_surf, icon_surf.get_rect(left=x, centery=cy))
+            surface.blit(text_surf, text_surf.get_rect(left=x + icon_surf.get_width() + gap, centery=cy))
+            line_y = cy + max(icon_surf.get_height(), text_surf.get_height()) // 2 + 4
         else:
-            pygame.draw.rect(surface, C_BG, self.rect)
-            pygame.draw.rect(surface, C_WHITE, self.rect, 3)
-            text_surf = font.render(self.text, True, C_WHITE)
-        surface.blit(text_surf, text_surf.get_rect(center=self.rect.center))
+            text_surf = font.render(self.text, True, fg)
+            r = text_surf.get_rect(center=self.rect.center)
+            surface.blit(text_surf, r)
+            line_y = r.bottom + 4
+
+        line_color = C_WHITE if self.active else C_GRAY
+        pygame.draw.line(surface, line_color,
+                         (self.rect.left, line_y), (self.rect.right, line_y), 3)
 
     def handle_event(self, event):
         if event.type == MOUSEBUTTONDOWN:
@@ -97,8 +135,8 @@ class ScrollMenu:
     Each button's rect is stored as a content-relative position (x from 0).
     """
 
-    FRICTION       = 0      # velocity multiplier per frame
-    SPRING         = 0.20   # overscroll pull-back factor per frame
+    FRICTION       = 0      # velocity multiplier per frame (inertia disabled)
+    SPRING         = 1.0    # overscroll snap-back (1.0 = instant)
     DRAG_THRESHOLD = 25     # px of horizontal movement to start a scroll
 
     def __init__(self, rect, buttons, btn_w, btn_gap):
@@ -111,7 +149,7 @@ class ScrollMenu:
             btn_w = (self.rect.width - btn_gap * (len(buttons) + 1)) // len(buttons)
         self.btn_w   = btn_w
 
-        btn_h = self.rect.height - 30   # 15 px padding top & bottom
+        btn_h = min(400, self.rect.height - 15 - 20)  # max 200px, 15px top + 20px bottom padding
         btn_y = self.rect.y + 15
 
         for i, btn in enumerate(self.buttons):
@@ -212,6 +250,12 @@ class ScrollMenu:
             if not self.dragging:
                 return False
             self.dragging = False
+            self.velocity = 0.0  # no inertia on release
+            # Clamp overscroll immediately
+            if self.scroll_x < self.min_scroll:
+                self.scroll_x = self.min_scroll
+            elif self.scroll_x > self.max_scroll:
+                self.scroll_x = self.max_scroll
             if not self.is_scroll and self.pressed_btn:
                 self.pressed_btn.is_pressed = False
                 if self.pressed_btn.action:
@@ -224,18 +268,31 @@ class ScrollMenu:
 
         return False
 
-    def draw(self, surface, font):
+    def draw(self, surface, font, font_icon=None):
         clip = surface.get_clip()
         surface.set_clip(self.rect)
         for btn in self.buttons:
             sr = self._screen_rect(btn)
             if sr.right <= self.rect.left or sr.left >= self.rect.right:
                 continue
-            color = C_ORANGE if btn.is_pressed else C_WHITE
-            pygame.draw.rect(surface, C_BG, sr)
-            pygame.draw.rect(surface, color, sr, 3)
-            text_surf = font.render(btn.text, True, color)
-            surface.blit(text_surf, text_surf.get_rect(center=sr.center))
+            bg = C_ORANGE if btn.is_pressed else C_BTN
+            # Draw button with cut bottom-right corner
+            c = 40  # corner cut size
+            l, t, r, b = sr.left, sr.top, sr.right, sr.bottom
+            pts = [(l, t), (r, t), (r, b - c), (r - c, b), (l, b)]
+            pygame.draw.polygon(surface, bg, pts)
+            if btn.icon and font_icon:
+                icon_surf = font_icon.render(btn.icon, True, C_WHITE)
+                text_surf = font.render(btn.text, True, C_WHITE)
+                gap       = 6
+                total_h   = icon_surf.get_height() + gap + text_surf.get_height()
+                top       = sr.centery - total_h // 2
+                surface.blit(icon_surf, icon_surf.get_rect(centerx=sr.centerx, top=top))
+                surface.blit(text_surf, text_surf.get_rect(centerx=sr.centerx,
+                                                            top=top + icon_surf.get_height() + gap))
+            else:
+                text_surf = font.render(btn.text, True, C_WHITE)
+                surface.blit(text_surf, text_surf.get_rect(center=sr.center))
         surface.set_clip(clip)
 
 
@@ -267,9 +324,11 @@ class ArcadeControlApp:
             font_path = os.path.join(os.path.dirname(__file__), 'fonts', 'Rajdhani-Bold.ttf')
             self.font = pygame.font.Font(font_path, 72)
             self.font_large = pygame.font.Font(font_path, 108)
+            self.font_action = pygame.font.Font(font_path, 36)
         except:
             self.font = pygame.font.Font(None, 72)
             self.font_large = pygame.font.Font(None, 96)
+            self.font_action = pygame.font.Font(None, 36)
 
         self.bg_color = C_BG
         self.text_color = C_WHITE
@@ -277,9 +336,27 @@ class ArcadeControlApp:
         # Smaller font for tab bar and slot sub-tabs
         try:
             font_path = os.path.join(os.path.dirname(__file__), 'fonts', 'Rajdhani-Bold.ttf')
-            self.font_tab = pygame.font.Font(font_path, 38)
+            self.font_tab = pygame.font.Font(font_path, 42)
+            self.font_slot = pygame.font.Font(font_path, 30)
         except:
-            self.font_tab = pygame.font.Font(None, 38)
+            self.font_tab = pygame.font.Font(None, 42)
+            self.font_slot = pygame.font.Font(None, 30)
+
+        # Material Symbols icon font
+        try:
+            icon_path = os.path.join(os.path.dirname(__file__), 'fonts', 'MaterialSymbols.ttf')
+            _f = pygame.font.Font(icon_path, 52)
+            _f.render('test', True, (255,255,255))  # validate not a null/variable font
+            self.font_icon        = _f
+            self.font_icon_sm     = pygame.font.Font(icon_path, 36)
+            self.font_icon_action = pygame.font.Font(icon_path, 80)
+            self.font_icon_lock   = pygame.font.Font(icon_path, 180)
+        except Exception as e:
+            print(f"[WARN] Icon font not loaded: {e}")
+            self.font_icon        = None
+            self.font_icon_sm     = None
+            self.font_icon_action = None
+            self.font_icon_lock   = None
 
         # State
         self.running = True
@@ -305,53 +382,64 @@ class ArcadeControlApp:
         
     def setup_ui(self):
         """Setup UI elements"""
-        # Numpad (lock screen)
+        # Numpad (lock screen) — centered in full screen
         numpad_layout = [
             ['1', '2', '3'],
             ['4', '5', '6'],
             ['7', '8', '9'],
             ['C', '0', 'OK']
         ]
-        btn_width = 240
-        btn_height = 160
-        spacing = 30
-        start_x = (self.width - btn_width * 3 - spacing * 2) // 2
-        start_y = 380
+        GAP_N    = 8
+        NUM_ROWS = 4
+        NUM_COLS = 3
+        NUM_TOP  = 310                             # below icon + pin dots
+        PAD_SIDE = 226                             # horizontal margin
+        PAD_BOT  = 20
+        avail_w  = self.width - PAD_SIDE * 2
+        avail_h  = self.height - NUM_TOP - PAD_BOT
+        btn_w    = (avail_w - GAP_N * (NUM_COLS - 1)) // NUM_COLS
+        btn_h    = (avail_h - GAP_N * (NUM_ROWS - 1)) // NUM_ROWS
+        numpad_w = NUM_COLS * btn_w + (NUM_COLS - 1) * GAP_N
+        numpad_h = NUM_ROWS * btn_h + (NUM_ROWS - 1) * GAP_N
+        start_x  = (self.width - numpad_w) // 2
+        start_y  = NUM_TOP + (avail_h - numpad_h) // 2
         for row_idx, row in enumerate(numpad_layout):
             for col_idx, label in enumerate(row):
-                x = start_x + col_idx * (btn_width + spacing)
-                y = start_y + row_idx * (btn_height + spacing)
+                x = start_x + col_idx * (btn_w + GAP_N)
+                y = start_y + row_idx * (btn_h + GAP_N)
                 self.numpad_buttons.append(SimpleButton(
-                    (x, y, btn_width, btn_height),
+                    (x, y, btn_w, btn_h),
                     label, action=lambda l=label: self.numpad_press(l)
                 ))
 
         # Layout constants
         GAP      = 4
         TAB_Y    = 90
-        TAB_H    = 55
+        TAB_H    = 110
         TAB_W    = (self.width - GAP * 3) // 4   # 4 tabs with 3 gaps between
         SLOT_Y   = TAB_Y + TAB_H + 10  # 155  – 10px gap below tab bar
-        SLOT_H   = 65
+        SLOT_H   = 130
         SLOT_W   = (self.width - GAP * 9) // 10  # 10 items (GENERAL + 1-9) with 9 gaps
         CONT_Y   = TAB_Y + TAB_H        # 145  – non-Partida content starts here
         CONT_Y_P = SLOT_Y + SLOT_H      # 220  – Partida content starts here
 
         # Main tab bar (4 tabs)
+        # Material Icons codepoints (static font, U+E000 range)
         tab_defs = [
-            ('sistema',  'SISTEMA'),
-            ('sonido',   'SONIDO'),
-            ('partida',  'PARTIDA'),
-            ('monedero', 'MONEDERO'),
+            ('sistema',  'SISTEMA',  '\ue30a'),  # computer
+            ('sonido',   'SONIDO',   '\ue050'),  # volume_up
+            ('partida',  'PARTIDA',  '\ue30f'),  # gamepad
+            ('monedero', 'MONEDERO', '\ue850'),  # account_balance_wallet
         ]
         self.tab_buttons = [
             TabButton(
                 (i * (TAB_W + GAP), TAB_Y, TAB_W, TAB_H),
                 name,
                 active=(tid == self.current_tab),
-                action=lambda t=tid: self.switch_tab(t)
+                action=lambda t=tid: self.switch_tab(t),
+                icon=icon,
             )
-            for i, (tid, name) in enumerate(tab_defs)
+            for i, (tid, name, icon) in enumerate(tab_defs)
         ]
 
         # Slot sub-tabs: GENERAL first, then 1-9
@@ -361,7 +449,8 @@ class ArcadeControlApp:
                 (i * (SLOT_W + GAP), SLOT_Y, SLOT_W, SLOT_H),
                 label,
                 active=(i == self.current_slot),
-                action=lambda s=i: self.switch_slot(s)
+                action=lambda s=i: self.switch_slot(s),
+                style='box',
             )
             for i, label in enumerate(slot_labels)
         ]
@@ -374,38 +463,38 @@ class ArcadeControlApp:
         h_part = self.height - CONT_Y_P  # 285
 
         self.partida_general_btns = [
-            SimpleButton((0, 0, 0, 0), "PAUSAR",       action=self.pause_game),
-            SimpleButton((0, 0, 0, 0), "INFO",         action=self.game_info),
-            SimpleButton((0, 0, 0, 0), "FAST FORWARD", action=self.fast_forward),
-            SimpleButton((0, 0, 0, 0), "SCREENSHOT",   action=self.screenshot),
-            SimpleButton((0, 0, 0, 0), "MENU",         action=self.mame_menu),
-            SimpleButton((0, 0, 0, 0), "REINICIAR",    action=self.restart_game),
-            SimpleButton((0, 0, 0, 0), "SALIR",        action=self.exit_game),
+            SimpleButton((0,0,0,0), "PAUSAR",       action=self.pause_game,    icon='\ue034'),  # pause
+            SimpleButton((0,0,0,0), "INFO",         action=self.game_info,     icon='\ue88e'),  # info
+            SimpleButton((0,0,0,0), "FAST FORWARD", action=self.fast_forward,  icon='\ue01f'),  # fast_forward
+            SimpleButton((0,0,0,0), "SCREENSHOT",   action=self.screenshot,    icon='\ue3b0'),  # add_a_photo
+            SimpleButton((0,0,0,0), "MENU",         action=self.mame_menu,     icon='\ue5d2'),  # menu
+            SimpleButton((0,0,0,0), "REINICIAR",    action=self.restart_game,  icon='\ue5d5'),  # refresh
+            SimpleButton((0,0,0,0), "SALIR",        action=self.exit_game,     icon='\ue9ba'),  # exit_to_app
         ]
         self.partida_slot_btns = [
-            SimpleButton((0, 0, 0, 0), "SAVE", action=self.save_state),
-            SimpleButton((0, 0, 0, 0), "LOAD", action=self.load_state),
+            SimpleButton((0,0,0,0), "SAVE", action=self.save_state, icon='\ue161'),  # save
+            SimpleButton((0,0,0,0), "LOAD", action=self.load_state, icon='\ue2c4'),  # folder_open
         ]
         self.partida_general_scroll = make_scroll(CONT_Y_P, h_part, self.partida_general_btns)
         self.partida_slot_scroll    = make_scroll(CONT_Y_P, h_part, self.partida_slot_btns)
 
         self.tab_scroll_menus = {
             'sistema':  make_scroll(CONT_Y, h_norm, [
-                SimpleButton((0, 0, 0, 0), "ENCENDER PC",  action=self.power_on_confirm),
-                SimpleButton((0, 0, 0, 0), "APAGAR PC",    action=self.power_off_confirm),
-                SimpleButton((0, 0, 0, 0), "PANTALLA OFF", action=self.screen_off),
-                SimpleButton((0, 0, 0, 0), "BLOQUEAR",     action=self.lock_screen),
-                SimpleButton((0, 0, 0, 0), "DEBUG",        action=self.open_debug),
-                SimpleButton((0, 0, 0, 0), "UPDATE",       action=self.update_confirm),
+                SimpleButton((0,0,0,0), "ENCENDER PC",  action=self.power_on_confirm,  icon='\ue1a7'),  # power
+                SimpleButton((0,0,0,0), "APAGAR PC",    action=self.power_off_confirm, icon='\ue8ac'),  # power_off
+                SimpleButton((0,0,0,0), "PANTALLA OFF", action=self.screen_off,        icon='\ue8d9'),  # no_meeting_room -> screen_lock_power
+                SimpleButton((0,0,0,0), "BLOQUEAR",     action=self.lock_screen,       icon='\ue897'),  # lock
+                SimpleButton((0,0,0,0), "DEBUG",        action=self.open_debug,        icon='\ue868'),  # bug_report
+                SimpleButton((0,0,0,0), "UPDATE",       action=self.update_confirm,    icon='\ue923'),  # system_update
             ]),
             'sonido':   make_scroll(CONT_Y, h_norm, [
-                SimpleButton((0, 0, 0, 0), "VOL +", action=self.volume_up),
-                SimpleButton((0, 0, 0, 0), "VOL -", action=self.volume_down),
-                SimpleButton((0, 0, 0, 0), "MUTE",  action=self.mute),
+                SimpleButton((0,0,0,0), "VOL +", action=self.volume_up,   icon='\ue050'),  # volume_up
+                SimpleButton((0,0,0,0), "VOL -", action=self.volume_down, icon='\ue04d'),  # volume_down
+                SimpleButton((0,0,0,0), "MUTE",  action=self.mute,        icon='\ue04f'),  # volume_off
             ]),
             'monedero': make_scroll(CONT_Y, h_norm, [
-                SimpleButton((0, 0, 0, 0), "COIN P1", action=self.coin_p1),
-                SimpleButton((0, 0, 0, 0), "COIN P2", action=self.coin_p2),
+                SimpleButton((0,0,0,0), "COIN P1", action=self.coin_p1, icon='\ue227'),  # monetization_on
+                SimpleButton((0,0,0,0), "COIN P2", action=self.coin_p2, icon='\ue227'),  # monetization_on
             ]),
         }
             
@@ -716,26 +805,30 @@ class ArcadeControlApp:
         if not self.screen_on:
             return
 
-        title = self.font_large.render("ACCESS CONTROL", True, C_WHITE)
-        self.screen.blit(title, title.get_rect(center=(self.width // 2, 150)))
+        # Lock icon centered at top
+        icon_y = 120
+        if self.font_icon_lock:
+            icon_surf = self.font_icon_lock.render('\ue897', True, C_WHITE)
+            self.screen.blit(icon_surf, icon_surf.get_rect(center=(self.width // 2, icon_y)))
+            dots_y = icon_y + icon_surf.get_height() // 2 + 30
+        else:
+            dots_y = 200
 
-        subtitle = self.font.render("ENTER PIN CODE", True, C_GRAY)
-        self.screen.blit(subtitle, subtitle.get_rect(center=(self.width // 2, 260)))
-
-        pin_box_width = 480
-        pin_box_height = 120
-        pin_box_x = (self.width - pin_box_width) // 2
-        pin_box_y = 310
-
-        pygame.draw.rect(self.screen, C_BG, (pin_box_x, pin_box_y, pin_box_width, pin_box_height))
-        pygame.draw.rect(self.screen, C_WHITE, (pin_box_x, pin_box_y, pin_box_width, pin_box_height), 3)
-
-        pin_display = "*" * len(self.pin_input) if self.pin_input else "----"
-        pin_text = self.font_large.render(pin_display, True, C_WHITE)
-        self.screen.blit(pin_text, pin_text.get_rect(center=(self.width // 2, pin_box_y + pin_box_height // 2)))
+        # PIN dot indicators centered
+        max_digits = 6
+        dot_r   = 12
+        dot_gap = 16
+        total_w = max_digits * (dot_r * 2) + (max_digits - 1) * dot_gap
+        dot_cx  = (self.width - total_w) // 2 + dot_r
+        for i in range(max_digits):
+            cx = dot_cx + i * (dot_r * 2 + dot_gap)
+            if i < len(self.pin_input):
+                pygame.draw.circle(self.screen, C_WHITE, (cx, dots_y), dot_r)
+            else:
+                pygame.draw.circle(self.screen, C_GRAY, (cx, dots_y), dot_r, 2)
 
         for btn in self.numpad_buttons:
-            btn.draw(self.screen, self.font)
+            btn.draw(self.screen, self.font_tab)
         
     def draw_lock_screen(self):
         """Draw lock screen with numpad"""
@@ -751,15 +844,15 @@ class ArcadeControlApp:
 
         # Main tab bar
         for btn in self.tab_buttons:
-            btn.draw(self.screen, self.font_tab)
+            btn.draw(self.screen, self.font_tab, self.font_icon)
 
         # Slot sub-tabs (only for Partida)
         if self.current_tab == 'partida':
             for btn in self.slot_buttons:
-                btn.draw(self.screen, self.font_tab)
+                btn.draw(self.screen, self.font_slot)
 
         # Scrollable content area for active tab
-        self._active_scroll_menu().draw(self.screen, self.font)
+        self._active_scroll_menu().draw(self.screen, self.font_action, self.font_icon_action)
         
     def draw_main_screen(self):
         """Draw main control interface"""
