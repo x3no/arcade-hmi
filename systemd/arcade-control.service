@@ -5,8 +5,8 @@ After=local-fs.target network.target
 [Service]
 Type=simple
 User=root
-WorkingDirectory=/home/alberto/apps/upac
-ExecStart=/bin/bash /home/alberto/apps/upac/start_x11.sh
+WorkingDirectory=/home/dietpi/arcade-hmi
+ExecStart=/bin/bash /home/dietpi/arcade-hmi/start_x11.sh
 Restart=on-failure
 RestartSec=5
 StandardOutput=journal
