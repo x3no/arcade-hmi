@@ -628,8 +628,14 @@ class ArcadeControlApp:
             env['GIT_ASKPASS'] = '/bin/echo'
             env['SSH_ASKPASS'] = '/bin/echo'
             env['GIT_SSH_COMMAND'] = 'ssh -o StrictHostKeyChecking=no -o BatchMode=yes'
+            # Run as the repo owner so stored credentials are found
+            repo_owner = os.stat(repo_dir).st_uid
+            import pwd
+            repo_user = pwd.getpwuid(repo_owner).pw_name
+            env['HOME'] = pwd.getpwuid(repo_owner).pw_dir
+            cmd = ['sudo', '-u', repo_user, 'git', 'pull'] if os.geteuid() == 0 else ['git', 'pull']
             proc = subprocess.Popen(
-                ['git', 'pull'],
+                cmd,
                 cwd=repo_dir,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
