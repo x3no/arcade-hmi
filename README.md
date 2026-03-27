@@ -206,6 +206,24 @@ ls -l /dev/fb0
 cat /boot/config.txt | grep framebuffer
 ```
 
+### Rotación de pantalla (HDMI, kernel KMS)
+
+En DietPi/Raspberry Pi OS Bookworm con el driver KMS (`vc4-kms-v3d`), el parámetro `display_rotate` de `config.txt` **no tiene efecto**. La rotación debe hacerse a nivel de kernel añadiendo al final de `/boot/firmware/cmdline.txt` (en una sola línea, sin salto):
+
+```
+video=HDMI-A-1:800x480,rotate=180
+```
+
+Para saber el nombre exacto de la salida HDMI en tu sistema:
+```bash
+ls /sys/class/drm/
+# Busca algo tipo card1-HDMI-A-1 → el nombre es HDMI-A-1
+```
+
+Valores válidos de `rotate`: `0`, `90`, `180`, `270`.
+
+> El táctil se puede rotar desde el propio menú físico de la pantalla, independientemente de la rotación del sistema.
+
 ### USB HID no funciona
 ```bash
 # Verificar dispositivo HID
