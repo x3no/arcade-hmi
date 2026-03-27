@@ -396,6 +396,7 @@ class ArcadeControlApp:
                 SimpleButton((0, 0, 0, 0), "PANTALLA OFF", action=self.screen_off),
                 SimpleButton((0, 0, 0, 0), "BLOQUEAR",     action=self.lock_screen),
                 SimpleButton((0, 0, 0, 0), "DEBUG",        action=self.open_debug),
+                SimpleButton((0, 0, 0, 0), "UPDATE",       action=self.update_confirm),
             ]),
             'sonido':   make_scroll(CONT_Y, h_norm, [
                 SimpleButton((0, 0, 0, 0), "VOL +", action=self.volume_up),
@@ -609,6 +610,53 @@ class ArcadeControlApp:
         """Power off external PC"""
         self.gpio.pulse_power_button(0.2)
         self.confirmation_dialog = None
+
+    def update_confirm(self):
+        self.confirmation_dialog = {
+            'title': '¿Actualizar app?',
+            'action': self.do_update,
+        }
+
+    def do_update(self):
+        import subprocess
+        self.confirmation_dialog = None
+
+        # Show a simple updating message
+        self.screen.fill(C_BG)
+        msg = self.font.render("Actualizando...", True, C_WHITE)
+        self.screen.blit(msg, msg.get_rect(center=(self.width // 2, self.height // 2)))
+        pygame.display.flip()
+
+        repo_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        try:
+            result = subprocess.run(
+                ['git', 'pull'],
+                cwd=repo_dir,
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+            success = result.returncode == 0
+            detail = (result.stdout or result.stderr or '').strip().splitlines()
+            line1 = detail[0] if detail else ('OK' if success else 'Error')
+        except Exception as e:
+            success = False
+            line1 = str(e)
+
+        self.screen.fill(C_BG)
+        color = C_WHITE if success else C_ORANGE
+        l1 = self.font.render(line1[:40], True, color)
+        self.screen.blit(l1, l1.get_rect(center=(self.width // 2, self.height // 2 - 40)))
+        if success:
+            l2 = self.font.render("Reiniciando...", True, C_GRAY)
+            self.screen.blit(l2, l2.get_rect(center=(self.width // 2, self.height // 2 + 40)))
+        pygame.display.flip()
+        pygame.time.wait(2000)
+
+        if success:
+            pygame.quit()
+            # Re-exec this process with the same arguments
+            os.execv(sys.executable, [sys.executable] + sys.argv)
     
     def draw_cyberpunk_bg(self):
         pass
