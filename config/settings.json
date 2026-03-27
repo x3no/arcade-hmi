@@ -2,14 +2,14 @@
   "pin": "1234",
   "gpio_power_pin": 17,
   "hid_device": "/dev/hidg0",
-  "screen_width": 960,
-  "screen_height": 540,
+  "screen_width": 1920,
+  "screen_height": 1080,
   "screen_timeout": 300,
   "button_color": [50, 150, 255],
   "button_hover_color": [70, 170, 255],
   "button_text_color": [255, 255, 255],
   "bg_color": [0, 0, 0],
   "text_color": [255, 255, 255],
-  "font_size": 36,
-  "font_size_large": 54
+  "font_size": 72,
+  "font_size_large": 108
 }

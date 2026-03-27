@@ -150,6 +150,9 @@ class KeyCode:
     KEY_LEFT = 0x50
     KEY_DOWN = 0x51
     KEY_UP = 0x52
+
+    # Navigation
+    KEY_INSERT = 0x49
     
     # Media keys (Consumer Control)
     KEY_MUTE = 0x7F

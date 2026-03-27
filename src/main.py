@@ -1,123 +1,242 @@
 #!/usr/bin/env python3
 """
-Arcade Control Panel - Main Application - CYBERPUNK THEME
+Arcade Control Panel - Main Application
 Touchscreen interface for arcade machine control
 """
 
 import os
 import sys
 import time
-import math
+import platform
 import pygame
 from pygame.locals import *
 
 from config import Config
-from usb_hid import USBHID, KeyCode
+from usb_hid import USBHID, KeyCode, Modifier
 from gpio_controller import GPIOController
 from keyboard_mapper import ArcadeKeyMapper
 
 
+# Detect if running on a Raspberry Pi
+IS_PI = platform.machine() in ('aarch64', 'armv7l', 'armv6l')
+
 # Configure SDL to use X11
 os.environ['SDL_VIDEODRIVER'] = 'x11'
-os.environ['SDL_NOMOUSE'] = '1'
+if IS_PI:
+    os.environ['SDL_NOMOUSE'] = '1'
 
-# Cyberpunk color scheme
-CYBER_BG = (0, 0, 0)             # Pure black for AMOLED
-CYBER_CYAN = (0, 255, 255)       # Bright cyan
-CYBER_MAGENTA = (255, 0, 255)    # Bright magenta
-CYBER_YELLOW = (255, 255, 0)     # Electric yellow
-CYBER_GREEN = (0, 255, 100)      # Neon green
-CYBER_PURPLE = (138, 43, 226)    # Deep purple
-CYBER_DARK = (20, 20, 50)        # Dark accent
-CYBER_GLOW_CYAN = (0, 200, 255, 128)   # Semi-transparent cyan glow
-CYBER_GLOW_MAGENTA = (255, 0, 200, 128) # Semi-transparent magenta glow
+# Color palette
+C_BG     = (0, 0, 0)        # Pure black
+C_WHITE  = (255, 255, 255)  # White
+C_GRAY   = (140, 140, 140)  # Mid gray
+C_DARK   = (20, 20, 20)     # Near-black for fills
+C_ORANGE = (255, 140, 0)    # Pressed state
 
 
-class CyberButton:
-    """Cyberpunk styled button widget"""
-    
-    def __init__(self, rect, text, color, action=None):
+class SimpleButton:
+    """Simple square button: black fill, white 3px border, white text."""
+
+    def __init__(self, rect, text, color=None, action=None):
         self.rect = pygame.Rect(rect)
         self.text = text
-        self.color = color
         self.action = action
-        self.is_hovered = False
-        self.glow_intensity = 0
-        self.animation_time = 0
-        
+        self.is_pressed = False
+
     def draw(self, surface, font):
-        """Draw cyberpunk button with glow effects"""
-        # Animate glow
-        self.animation_time += 0.05
-        pulse = abs(math.sin(self.animation_time)) * 0.3 + 0.7
-        
-        # Glow effect when hovered
-        if self.is_hovered:
-            self.glow_intensity = min(1.0, self.glow_intensity + 0.1)
-        else:
-            self.glow_intensity = max(0.0, self.glow_intensity - 0.1)
-        
-        # Draw outer glow
-        if self.glow_intensity > 0:
-            glow_surface = pygame.Surface((self.rect.width + 10, self.rect.height + 10), pygame.SRCALPHA)
-            glow_color = (*self.color, int(80 * self.glow_intensity * pulse))
-            pygame.draw.rect(glow_surface, glow_color, glow_surface.get_rect(), border_radius=8)
-            surface.blit(glow_surface, (self.rect.x - 5, self.rect.y - 5))
-        
-        # Draw main button with corner cuts (cyberpunk style)
-        corner_size = 4
-        points = [
-            (self.rect.x + corner_size, self.rect.y),
-            (self.rect.right - corner_size, self.rect.y),
-            (self.rect.right, self.rect.y + corner_size),
-            (self.rect.right, self.rect.bottom - corner_size),
-            (self.rect.right - corner_size, self.rect.bottom),
-            (self.rect.x + corner_size, self.rect.bottom),
-            (self.rect.x, self.rect.bottom - corner_size),
-            (self.rect.x, self.rect.y + corner_size),
-        ]
-        
-        # Button background
-        bg_color = tuple(int(c * 0.3) for c in self.color)
-        pygame.draw.polygon(surface, bg_color, points)
-        
-        # Neon border
-        border_color = tuple(int(c * (pulse if self.is_hovered else 0.8)) for c in self.color)
-        pygame.draw.polygon(surface, border_color, points, 3)
-        
-        # Scanline effect
-        for i in range(0, self.rect.height, 2):
-            line_alpha = 30
-            line_surf = pygame.Surface((self.rect.width - 8, 1), pygame.SRCALPHA)
-            line_surf.fill((255, 255, 255, line_alpha))
-            surface.blit(line_surf, (self.rect.x + 4, self.rect.y + i))
-        
-        # Text with glow
-        text_color = tuple(min(255, int(c * (1.2 if self.is_hovered else 1.0))) for c in self.color)
-        text_surf = font.render(self.text, True, text_color)
-        text_rect = text_surf.get_rect(center=self.rect.center)
-        
-        # Text shadow/glow
-        if self.is_hovered:
-            shadow_surf = font.render(self.text, True, (*self.color[:3], 128))
-            for offset in [(1, 1), (-1, -1), (1, -1), (-1, 1)]:
-                shadow_rect = text_rect.copy()
-                shadow_rect.x += offset[0]
-                shadow_rect.y += offset[1]
-                surface.blit(shadow_surf, shadow_rect)
-        
-        surface.blit(text_surf, text_rect)
-        
+        color = C_ORANGE if self.is_pressed else C_WHITE
+        pygame.draw.rect(surface, C_BG, self.rect)
+        pygame.draw.rect(surface, color, self.rect, 3)
+        text_surf = font.render(self.text, True, color)
+        surface.blit(text_surf, text_surf.get_rect(center=self.rect.center))
+
     def handle_event(self, event):
-        """Handle mouse/touch events"""
-        if event.type == MOUSEMOTION:
-            self.is_hovered = self.rect.collidepoint(event.pos)
-        elif event.type == MOUSEBUTTONDOWN:
+        if event.type == MOUSEBUTTONDOWN:
+            if self.rect.collidepoint(event.pos):
+                self.is_pressed = True
+                return True
+        elif event.type == MOUSEBUTTONUP:
+            if self.is_pressed:
+                self.is_pressed = False
+                if self.rect.collidepoint(event.pos) and self.action:
+                    self.action()
+                return True
+        return False
+
+
+class TabButton:
+    """Tab/slot selector: active = white bg + black text, inactive = black bg + white border."""
+
+    def __init__(self, rect, text, active=False, action=None):
+        self.rect   = pygame.Rect(rect)
+        self.text   = text
+        self.active = active
+        self.action = action
+
+    def draw(self, surface, font):
+        if self.active:
+            pygame.draw.rect(surface, C_WHITE, self.rect)
+            text_surf = font.render(self.text, True, C_BG)
+        else:
+            pygame.draw.rect(surface, C_BG, self.rect)
+            pygame.draw.rect(surface, C_WHITE, self.rect, 3)
+            text_surf = font.render(self.text, True, C_WHITE)
+        surface.blit(text_surf, text_surf.get_rect(center=self.rect.center))
+
+    def handle_event(self, event):
+        if event.type == MOUSEBUTTONDOWN:
             if self.rect.collidepoint(event.pos):
                 if self.action:
                     self.action()
                 return True
         return False
+
+
+class ScrollMenu:
+    """
+    Horizontally scrollable button strip with inertia and overscroll bounce.
+    Each button's rect is stored as a content-relative position (x from 0).
+    """
+
+    FRICTION       = 0      # velocity multiplier per frame
+    SPRING         = 0.20   # overscroll pull-back factor per frame
+    DRAG_THRESHOLD = 25     # px of horizontal movement to start a scroll
+
+    def __init__(self, rect, buttons, btn_w, btn_gap):
+        self.rect    = pygame.Rect(rect)
+        self.buttons = buttons
+        self.btn_gap = btn_gap
+
+        # 4 or fewer buttons: expand to fill full width (scroll disabled)
+        if len(buttons) <= 4:
+            btn_w = (self.rect.width - btn_gap * (len(buttons) + 1)) // len(buttons)
+        self.btn_w   = btn_w
+
+        btn_h = self.rect.height - 30   # 15 px padding top & bottom
+        btn_y = self.rect.y + 15
+
+        for i, btn in enumerate(self.buttons):
+            btn.rect = pygame.Rect(
+                btn_gap + i * (btn_w + btn_gap),
+                btn_y,
+                btn_w,
+                btn_h,
+            )
+
+        self.content_w  = btn_gap + len(buttons) * (btn_w + btn_gap)
+        self.min_scroll = 0
+        self.max_scroll = max(0, self.content_w - self.rect.width)
+
+        self.scroll_x      = 0.0
+        self.velocity      = 0.0
+        self.dragging      = False
+        self.drag_origin_x = 0
+        self.drag_scroll0  = 0.0
+        self.drag_last_x   = 0
+        self.drag_last_t   = 0
+        self.is_scroll     = False
+        self.pressed_btn   = None
+
+    def _screen_rect(self, btn):
+        return pygame.Rect(
+            self.rect.x + btn.rect.x - int(self.scroll_x),
+            btn.rect.y,
+            btn.rect.width,
+            btn.rect.height,
+        )
+
+    def update(self):
+        if self.dragging:
+            return
+
+        self.scroll_x += self.velocity
+        self.velocity  *= self.FRICTION
+
+        if self.scroll_x < self.min_scroll:
+            self.scroll_x += (self.min_scroll - self.scroll_x) * self.SPRING
+            self.velocity  *= 0.7
+        elif self.scroll_x > self.max_scroll:
+            self.scroll_x += (self.max_scroll - self.scroll_x) * self.SPRING
+            self.velocity  *= 0.7
+
+        if abs(self.velocity) < 0.05:
+            self.velocity = 0.0
+
+    def handle_event(self, event):
+        if event.type == MOUSEBUTTONDOWN and event.button == 1:
+            if not self.rect.collidepoint(event.pos):
+                return False
+            self.dragging      = True
+            self.is_scroll     = False
+            self.drag_origin_x = event.pos[0]
+            self.drag_scroll0  = self.scroll_x
+            self.drag_last_x   = event.pos[0]
+            self.drag_last_t   = pygame.time.get_ticks()
+            self.velocity      = 0.0
+            for btn in self.buttons:
+                if self._screen_rect(btn).collidepoint(event.pos):
+                    btn.is_pressed   = True
+                    self.pressed_btn = btn
+                    break
+            return True
+
+        elif event.type == MOUSEMOTION:
+            if not self.dragging:
+                return False
+            dx = event.pos[0] - self.drag_origin_x
+            if abs(dx) > self.DRAG_THRESHOLD and self.max_scroll > 0:
+                self.is_scroll = True
+                if self.pressed_btn:
+                    self.pressed_btn.is_pressed = False
+                    self.pressed_btn = None
+
+            if not self.is_scroll:
+                return True
+
+            now = pygame.time.get_ticks()
+            dt  = max(1, now - self.drag_last_t)
+            self.velocity    = -(event.pos[0] - self.drag_last_x) / dt * (1000 / 30)
+            self.drag_last_x = event.pos[0]
+            self.drag_last_t = now
+
+            raw = self.drag_scroll0 - dx
+            if raw < self.min_scroll:
+                over = self.min_scroll - raw
+                raw  = self.min_scroll - over * 0.35
+            elif raw > self.max_scroll:
+                over = raw - self.max_scroll
+                raw  = self.max_scroll + over * 0.35
+            self.scroll_x = raw
+            return True
+
+        elif event.type == MOUSEBUTTONUP and event.button == 1:
+            if not self.dragging:
+                return False
+            self.dragging = False
+            if not self.is_scroll and self.pressed_btn:
+                self.pressed_btn.is_pressed = False
+                if self.pressed_btn.action:
+                    self.pressed_btn.action()
+                self.pressed_btn = None
+            elif self.pressed_btn:
+                self.pressed_btn.is_pressed = False
+                self.pressed_btn = None
+            return True
+
+        return False
+
+    def draw(self, surface, font):
+        clip = surface.get_clip()
+        surface.set_clip(self.rect)
+        for btn in self.buttons:
+            sr = self._screen_rect(btn)
+            if sr.right <= self.rect.left or sr.left >= self.rect.right:
+                continue
+            color = C_ORANGE if btn.is_pressed else C_WHITE
+            pygame.draw.rect(surface, C_BG, sr)
+            pygame.draw.rect(surface, color, sr, 3)
+            text_surf = font.render(btn.text, True, color)
+            surface.blit(text_surf, text_surf.get_rect(center=sr.center))
+        surface.set_clip(clip)
 
 
 class ArcadeControlApp:
@@ -138,118 +257,174 @@ class ArcadeControlApp:
         self.width = self.config['screen_width']
         self.height = self.config['screen_height']
         print(f"Creating display: {self.width}x{self.height}")
-        self.screen = pygame.display.set_mode((self.width, self.height), pygame.FULLSCREEN)
+        flags = pygame.FULLSCREEN if IS_PI else 0
+        self.screen = pygame.display.set_mode((self.width, self.height), flags)
         print("Display created successfully")
-        pygame.display.set_caption("CYBER//ARCADE Control")
-        
-        # Fonts - Use Rajdhani for cyberpunk look
+        pygame.display.set_caption("Arcade Control")
+
+        # Fonts
         try:
             font_path = os.path.join(os.path.dirname(__file__), 'fonts', 'Rajdhani-Bold.ttf')
-            self.font = pygame.font.Font(font_path, 36)
-            self.font_large = pygame.font.Font(font_path, 54)
+            self.font = pygame.font.Font(font_path, 72)
+            self.font_large = pygame.font.Font(font_path, 108)
         except:
-            # Fallback to default
-            self.font = pygame.font.Font(None, 36)
-            self.font_large = pygame.font.Font(None, 54)
-        
-        # Cyberpunk colors
-        self.bg_color = CYBER_BG
-        self.text_color = CYBER_CYAN
-        
+            self.font = pygame.font.Font(None, 72)
+            self.font_large = pygame.font.Font(None, 96)
+
+        self.bg_color = C_BG
+        self.text_color = C_WHITE
+
+        # Smaller font for tab bar and slot sub-tabs
+        try:
+            font_path = os.path.join(os.path.dirname(__file__), 'fonts', 'Rajdhani-Bold.ttf')
+            self.font_tab = pygame.font.Font(font_path, 38)
+        except:
+            self.font_tab = pygame.font.Font(None, 38)
+
         # State
         self.running = True
         self.locked = True
-        self.screen_on = True  # Start with screen on for testing
+        self.screen_on = True
         self.pin_input = ""
         self.confirmation_dialog = None
-        self.scanline_offset = 0
-        
+        self.debug_screen = False
+        self.current_tab  = 'sistema'
+        self.current_slot = 0  # 0 = general, 1-9 = save slots
+
         # Hardware controllers
         self.hid = None
         self.gpio = GPIOController(self.config['gpio_power_pin'])
-        
+
         # Clock
         self.clock = pygame.time.Clock()
-        
+
         # UI Elements
-        self.buttons = []
         self.numpad_buttons = []
-        self.main_buttons = []
-        
+
         self.setup_ui()
         
     def setup_ui(self):
         """Setup UI elements"""
-        # Numpad for PIN entry - cyberpunk colors
+        # Numpad (lock screen)
         numpad_layout = [
             ['1', '2', '3'],
             ['4', '5', '6'],
             ['7', '8', '9'],
             ['C', '0', 'OK']
         ]
-        
-        numpad_colors = [
-            [CYBER_CYAN, CYBER_CYAN, CYBER_CYAN],
-            [CYBER_CYAN, CYBER_CYAN, CYBER_CYAN],
-            [CYBER_CYAN, CYBER_CYAN, CYBER_CYAN],
-            [CYBER_MAGENTA, CYBER_CYAN, CYBER_GREEN]  # C, 0, OK with different colors
-        ]
-        
-        btn_width = 120
-        btn_height = 80
-        spacing = 15
+        btn_width = 240
+        btn_height = 160
+        spacing = 30
         start_x = (self.width - btn_width * 3 - spacing * 2) // 2
-        start_y = 190
-        
+        start_y = 380
         for row_idx, row in enumerate(numpad_layout):
             for col_idx, label in enumerate(row):
                 x = start_x + col_idx * (btn_width + spacing)
                 y = start_y + row_idx * (btn_height + spacing)
-                
-                btn = CyberButton(
+                self.numpad_buttons.append(SimpleButton(
                     (x, y, btn_width, btn_height),
-                    label,
-                    numpad_colors[row_idx][col_idx],
-                    lambda l=label: self.numpad_press(l)
-                )
-                self.numpad_buttons.append(btn)
-        
-        # Main control buttons with cyberpunk colors
-        btn_w = 215
-        btn_h = 95
-        spacing = 25
-        cols = 3
-        rows = 3
-        
-        start_x = (self.width - (btn_w * cols + spacing * (cols - 1))) // 2
-        start_y = 125
-        
-        actions = [
-            ("VOL +", self.volume_up, CYBER_GREEN),
-            ("VOL -", self.volume_down, CYBER_GREEN),
-            ("MUTE", self.mute, CYBER_YELLOW),
-            ("COIN P1", self.coin_p1, CYBER_MAGENTA),
-            ("COIN P2", self.coin_p2, CYBER_MAGENTA),
-            ("PANTALLA OFF", self.screen_off, CYBER_PURPLE),
-            ("ENCENDER PC", self.power_on_confirm, CYBER_CYAN),
-            ("APAGAR PC", self.power_off_confirm, (255, 50, 50)),  # Red
-            ("BLOQUEAR", self.lock_screen, CYBER_YELLOW),
+                    label, action=lambda l=label: self.numpad_press(l)
+                ))
+
+        # Layout constants
+        GAP      = 4
+        TAB_Y    = 90
+        TAB_H    = 55
+        TAB_W    = (self.width - GAP * 3) // 4   # 4 tabs with 3 gaps between
+        SLOT_Y   = TAB_Y + TAB_H + 10  # 155  – 10px gap below tab bar
+        SLOT_H   = 65
+        SLOT_W   = (self.width - GAP * 9) // 10  # 10 items (GENERAL + 1-9) with 9 gaps
+        CONT_Y   = TAB_Y + TAB_H        # 145  – non-Partida content starts here
+        CONT_Y_P = SLOT_Y + SLOT_H      # 220  – Partida content starts here
+
+        # Main tab bar (4 tabs)
+        tab_defs = [
+            ('sistema',  'SISTEMA'),
+            ('sonido',   'SONIDO'),
+            ('partida',  'PARTIDA'),
+            ('monedero', 'MONEDERO'),
         ]
-        
-        for idx, (label, action, color) in enumerate(actions):
-            row = idx // cols
-            col = idx % cols
-            x = start_x + col * (btn_w + spacing)
-            y = start_y + row * (btn_h + spacing)
-            
-            btn = CyberButton(
-                (x, y, btn_w, btn_h),
-                label,
-                color,
-                action
+        self.tab_buttons = [
+            TabButton(
+                (i * (TAB_W + GAP), TAB_Y, TAB_W, TAB_H),
+                name,
+                active=(tid == self.current_tab),
+                action=lambda t=tid: self.switch_tab(t)
             )
-            self.main_buttons.append(btn)
+            for i, (tid, name) in enumerate(tab_defs)
+        ]
+
+        # Slot sub-tabs: GENERAL first, then 1-9
+        slot_labels = ['GENERAL'] + [str(i) for i in range(1, 10)]
+        self.slot_buttons = [
+            TabButton(
+                (i * (SLOT_W + GAP), SLOT_Y, SLOT_W, SLOT_H),
+                label,
+                active=(i == self.current_slot),
+                action=lambda s=i: self.switch_slot(s)
+            )
+            for i, label in enumerate(slot_labels)
+        ]
+
+        # Per-tab scroll menus
+        def make_scroll(y, h, btns):
+            return ScrollMenu((0, y, self.width, h), btns, btn_w=340, btn_gap=20)
+
+        h_norm = self.height - CONT_Y    # 335
+        h_part = self.height - CONT_Y_P  # 285
+
+        self.partida_general_btns = [
+            SimpleButton((0, 0, 0, 0), "PAUSAR",       action=self.pause_game),
+            SimpleButton((0, 0, 0, 0), "INFO",         action=self.game_info),
+            SimpleButton((0, 0, 0, 0), "FAST FORWARD", action=self.fast_forward),
+            SimpleButton((0, 0, 0, 0), "SCREENSHOT",   action=self.screenshot),
+            SimpleButton((0, 0, 0, 0), "MENU",         action=self.mame_menu),
+            SimpleButton((0, 0, 0, 0), "REINICIAR",    action=self.restart_game),
+            SimpleButton((0, 0, 0, 0), "SALIR",        action=self.exit_game),
+        ]
+        self.partida_slot_btns = [
+            SimpleButton((0, 0, 0, 0), "SAVE", action=self.save_state),
+            SimpleButton((0, 0, 0, 0), "LOAD", action=self.load_state),
+        ]
+        self.partida_general_scroll = make_scroll(CONT_Y_P, h_part, self.partida_general_btns)
+        self.partida_slot_scroll    = make_scroll(CONT_Y_P, h_part, self.partida_slot_btns)
+
+        self.tab_scroll_menus = {
+            'sistema':  make_scroll(CONT_Y, h_norm, [
+                SimpleButton((0, 0, 0, 0), "ENCENDER PC",  action=self.power_on_confirm),
+                SimpleButton((0, 0, 0, 0), "APAGAR PC",    action=self.power_off_confirm),
+                SimpleButton((0, 0, 0, 0), "PANTALLA OFF", action=self.screen_off),
+                SimpleButton((0, 0, 0, 0), "BLOQUEAR",     action=self.lock_screen),
+                SimpleButton((0, 0, 0, 0), "DEBUG",        action=self.open_debug),
+            ]),
+            'sonido':   make_scroll(CONT_Y, h_norm, [
+                SimpleButton((0, 0, 0, 0), "VOL +", action=self.volume_up),
+                SimpleButton((0, 0, 0, 0), "VOL -", action=self.volume_down),
+                SimpleButton((0, 0, 0, 0), "MUTE",  action=self.mute),
+            ]),
+            'monedero': make_scroll(CONT_Y, h_norm, [
+                SimpleButton((0, 0, 0, 0), "COIN P1", action=self.coin_p1),
+                SimpleButton((0, 0, 0, 0), "COIN P2", action=self.coin_p2),
+            ]),
+        }
             
+    def _active_scroll_menu(self):
+        """Return the scroll menu for the currently active tab/sub-tab."""
+        if self.current_tab == 'partida':
+            return self.partida_general_scroll if self.current_slot == 0 else self.partida_slot_scroll
+        return self.tab_scroll_menus[self.current_tab]
+
+    def switch_tab(self, tab_id):
+        self.current_tab = tab_id
+        tab_ids = ['sistema', 'sonido', 'partida', 'monedero']
+        for btn, tid in zip(self.tab_buttons, tab_ids):
+            btn.active = (tid == tab_id)
+
+    def switch_slot(self, slot):
+        self.current_slot = slot
+        for i, btn in enumerate(self.slot_buttons):
+            btn.active = (i == slot)
+
     def numpad_press(self, key):
         """Handle numpad key press"""
         if key == 'C':
@@ -336,7 +511,80 @@ class ArcadeControlApp:
                 hid.send_key(ArcadeKeyMapper.get_key('coin_p2'))
         except Exception as e:
             print(f"Error sending coin P2: {e}")
-            
+
+    _SLOT_KEYS = [
+        KeyCode.KEY_1, KeyCode.KEY_2, KeyCode.KEY_3,
+        KeyCode.KEY_4, KeyCode.KEY_5, KeyCode.KEY_6,
+        KeyCode.KEY_7, KeyCode.KEY_8, KeyCode.KEY_9,
+    ]
+
+    def save_state(self):
+        """Save MAME state: Shift+F7, then slot digit"""
+        try:
+            with USBHID(self.config['hid_device']) as hid:
+                hid.send_key(KeyCode.KEY_F7, Modifier.LEFT_SHIFT)
+                hid.send_key(self._SLOT_KEYS[self.current_slot - 1])
+        except Exception as e:
+            print(f"Error saving state slot {self.current_slot}: {e}")
+
+    def load_state(self):
+        """Load MAME state: F7, then slot digit"""
+        try:
+            with USBHID(self.config['hid_device']) as hid:
+                hid.send_key(KeyCode.KEY_F7)
+                hid.send_key(self._SLOT_KEYS[self.current_slot - 1])
+        except Exception as e:
+            print(f"Error loading state slot {self.current_slot}: {e}")
+
+    def pause_game(self):
+        try:
+            with USBHID(self.config['hid_device']) as hid:
+                hid.send_key(KeyCode.KEY_P)
+        except Exception as e:
+            print(f"Error sending pause: {e}")
+
+    def game_info(self):
+        try:
+            with USBHID(self.config['hid_device']) as hid:
+                hid.send_key(KeyCode.KEY_F2)
+        except Exception as e:
+            print(f"Error sending info: {e}")
+
+    def fast_forward(self):
+        try:
+            with USBHID(self.config['hid_device']) as hid:
+                hid.send_key(KeyCode.KEY_INSERT)
+        except Exception as e:
+            print(f"Error sending fast forward: {e}")
+
+    def screenshot(self):
+        try:
+            with USBHID(self.config['hid_device']) as hid:
+                hid.send_key(KeyCode.KEY_F12)
+        except Exception as e:
+            print(f"Error sending screenshot: {e}")
+
+    def mame_menu(self):
+        try:
+            with USBHID(self.config['hid_device']) as hid:
+                hid.send_key(KeyCode.KEY_TAB)
+        except Exception as e:
+            print(f"Error sending menu: {e}")
+
+    def restart_game(self):
+        try:
+            with USBHID(self.config['hid_device']) as hid:
+                hid.send_key(KeyCode.KEY_F3)
+        except Exception as e:
+            print(f"Error sending restart: {e}")
+
+    def exit_game(self):
+        try:
+            with USBHID(self.config['hid_device']) as hid:
+                hid.send_key(KeyCode.KEY_ESC)
+        except Exception as e:
+            print(f"Error sending exit: {e}")
+
     # Power actions with confirmation
     def power_on_confirm(self):
         """Show confirmation for power on"""
@@ -363,75 +611,32 @@ class ArcadeControlApp:
         self.confirmation_dialog = None
     
     def draw_cyberpunk_bg(self):
-        """Draw cyberpunk background effects"""
-        # No scanlines for AMOLED - keep it pure black
-        
-        # Corner decorations (subtle)
-        corner_color = CYBER_CYAN
-        corner_size = 40
-        corner_thickness = 1
-        
-        # Top-left
-        pygame.draw.line(self.screen, corner_color, (10, 10), (10 + corner_size, 10), corner_thickness)
-        pygame.draw.line(self.screen, corner_color, (10, 10), (10, 10 + corner_size), corner_thickness)
-        
-        # Top-right
-        pygame.draw.line(self.screen, corner_color, (self.width - 10, 10), (self.width - 10 - corner_size, 10), corner_thickness)
-        pygame.draw.line(self.screen, corner_color, (self.width - 10, 10), (self.width - 10, 10 + corner_size), corner_thickness)
-        
-        # Bottom-left
-        pygame.draw.line(self.screen, corner_color, (10, self.height - 10), (10 + corner_size, self.height - 10), corner_thickness)
-        pygame.draw.line(self.screen, corner_color, (10, self.height - 10), (10, self.height - 10 - corner_size), corner_thickness)
-        
-        # Bottom-right
-        pygame.draw.line(self.screen, corner_color, (self.width - 10, self.height - 10), (self.width - 10 - corner_size, self.height - 10), corner_thickness)
-        pygame.draw.line(self.screen, corner_color, (self.width - 10, self.height - 10), (self.width - 10, self.height - 10 - corner_size), corner_thickness)
+        pass
     
     def draw_lock_screen_base(self):
-        """Draw lock screen content without flip"""
         self.screen.fill(self.bg_color)
-        
+
         if not self.screen_on:
             return
-        
-        # Cyberpunk background
-        self.draw_cyberpunk_bg()
-            
-        # Title with glitch effect
-        title_text = ">> ACCESS CONTROL <<"
-        title = self.font_large.render(title_text, True, CYBER_CYAN)
-        title_rect = title.get_rect(center=(self.width // 2, 75))
-        
-        # Glow effect
-        glow = self.font_large.render(title_text, True, (*CYBER_CYAN, 128))
-        for offset in [(2, 2), (-2, -2)]:
-            glow_rect = title_rect.copy()
-            glow_rect.x += offset[0]
-            glow_rect.y += offset[1]
-            self.screen.blit(glow, glow_rect)
-        
-        self.screen.blit(title, title_rect)
-        
-        # Subtitle
-        subtitle = self.font.render("ENTER PIN CODE", True, CYBER_MAGENTA)
-        subtitle_rect = subtitle.get_rect(center=(self.width // 2, 130))
-        self.screen.blit(subtitle, subtitle_rect)
-        
-        # PIN display with box
-        pin_box_width = 240
-        pin_box_height = 60
+
+        title = self.font_large.render("ACCESS CONTROL", True, C_WHITE)
+        self.screen.blit(title, title.get_rect(center=(self.width // 2, 150)))
+
+        subtitle = self.font.render("ENTER PIN CODE", True, C_GRAY)
+        self.screen.blit(subtitle, subtitle.get_rect(center=(self.width // 2, 260)))
+
+        pin_box_width = 480
+        pin_box_height = 120
         pin_box_x = (self.width - pin_box_width) // 2
-        pin_box_y = 155
-        
-        pygame.draw.rect(self.screen, CYBER_DARK, (pin_box_x, pin_box_y, pin_box_width, pin_box_height))
-        pygame.draw.rect(self.screen, CYBER_CYAN, (pin_box_x, pin_box_y, pin_box_width, pin_box_height), 2)
-        
+        pin_box_y = 310
+
+        pygame.draw.rect(self.screen, C_BG, (pin_box_x, pin_box_y, pin_box_width, pin_box_height))
+        pygame.draw.rect(self.screen, C_WHITE, (pin_box_x, pin_box_y, pin_box_width, pin_box_height), 3)
+
         pin_display = "*" * len(self.pin_input) if self.pin_input else "----"
-        pin_text = self.font_large.render(pin_display, True, CYBER_GREEN)
-        pin_rect = pin_text.get_rect(center=(self.width // 2, pin_box_y + pin_box_height // 2))
-        self.screen.blit(pin_text, pin_rect)
-        
-        # Numpad
+        pin_text = self.font_large.render(pin_display, True, C_WHITE)
+        self.screen.blit(pin_text, pin_text.get_rect(center=(self.width // 2, pin_box_y + pin_box_height // 2)))
+
         for btn in self.numpad_buttons:
             btn.draw(self.screen, self.font)
         
@@ -441,111 +646,152 @@ class ArcadeControlApp:
         pygame.display.flip()
         
     def draw_main_screen_base(self):
-        """Draw main screen content without flip"""
         self.screen.fill(self.bg_color)
-        
-        # Cyberpunk background
-        self.draw_cyberpunk_bg()
-        
-        # Title with cyberpunk style
-        title_text = "// CYBER ARCADE CONTROL //"
-        title = self.font_large.render(title_text, True, CYBER_CYAN)
-        title_rect = title.get_rect(center=(self.width // 2, 45))
-        
-        # Glow
-        for offset in [(2, 2), (-2, -2), (2, 0), (-2, 0)]:
-            glow = self.font_large.render(title_text, True, (*CYBER_CYAN, 80))
-            glow_rect = title_rect.copy()
-            glow_rect.x += offset[0]
-            glow_rect.y += offset[1]
-            self.screen.blit(glow, glow_rect)
-        
-        self.screen.blit(title, title_rect)
-        
-        # Status line
-        status_text = "[ SYSTEM ONLINE ]"
-        status = self.font.render(status_text, True, CYBER_GREEN)
-        status_rect = status.get_rect(center=(self.width // 2, 33))
-        self.screen.blit(status, status_rect)
-        
-        # Buttons
-        for btn in self.main_buttons:
-            btn.draw(self.screen, self.font)
+
+        # Title
+        title = self.font.render("ARCADE CONTROL", True, C_WHITE)
+        self.screen.blit(title, title.get_rect(center=(self.width // 2, 48)))
+
+        # Main tab bar
+        for btn in self.tab_buttons:
+            btn.draw(self.screen, self.font_tab)
+
+        # Slot sub-tabs (only for Partida)
+        if self.current_tab == 'partida':
+            for btn in self.slot_buttons:
+                btn.draw(self.screen, self.font_tab)
+
+        # Scrollable content area for active tab
+        self._active_scroll_menu().draw(self.screen, self.font)
         
     def draw_main_screen(self):
         """Draw main control interface"""
         self.draw_main_screen_base()
         pygame.display.flip()
-        
+
+    def open_debug(self):
+        self.debug_screen = True
+        self.debug_info = self.get_network_info()
+        btn_w, btn_h = 240, 65
+        self.debug_close_btn = SimpleButton(
+            ((self.width - btn_w) // 2, 370, btn_w, btn_h),
+            "CERRAR",
+            action=self.close_debug,
+        )
+
+    def close_debug(self):
+        self.debug_screen = False
+
+    def get_network_info(self):
+        import subprocess, socket, re
+        info = {'connected': False, 'ssid': None, 'signal_pct': None, 'ip': None}
+        try:
+            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            s.connect(('8.8.8.8', 80))
+            info['ip'] = s.getsockname()[0]
+            s.close()
+        except Exception:
+            try:
+                info['ip'] = socket.gethostbyname(socket.gethostname())
+            except Exception:
+                pass
+        # Try iwconfig first
+        try:
+            out = subprocess.check_output(
+                ['iwconfig'], stderr=subprocess.STDOUT, timeout=3
+            ).decode('utf-8', errors='ignore')
+            m = re.search(r'ESSID:"([^"]+)"', out)
+            if m:
+                info['ssid'] = m.group(1)
+                info['connected'] = True
+            m = re.search(r'Link Quality=(\d+)/(\d+)', out)
+            if m:
+                info['signal_pct'] = int(m.group(1)) * 100 // int(m.group(2))
+        except Exception:
+            pass
+        # Fallback: nmcli
+        if not info['connected']:
+            try:
+                out = subprocess.check_output(
+                    ['nmcli', '-t', '-f', 'active,ssid,signal', 'dev', 'wifi'],
+                    stderr=subprocess.DEVNULL, timeout=3
+                ).decode('utf-8', errors='ignore')
+                for line in out.splitlines():
+                    parts = line.split(':')
+                    if len(parts) >= 3 and parts[0] == 'yes':
+                        info['connected'] = True
+                        info['ssid'] = parts[1]
+                        try:
+                            info['signal_pct'] = int(parts[2])
+                        except ValueError:
+                            pass
+                        break
+            except Exception:
+                pass
+        return info
+
+    def draw_debug_screen(self):
+        self.screen.fill(C_BG)
+        info = self.debug_info
+
+        title = self.font.render("DEBUG", True, C_WHITE)
+        self.screen.blit(title, title.get_rect(center=(self.width // 2, 45)))
+        pygame.draw.line(self.screen, C_GRAY, (20, 85), (self.width - 20, 85), 2)
+
+        rows = [
+            ("WiFi",      "CONECTADO" if info['connected'] else "NO CONECTADO",
+                          C_WHITE if info['connected'] else C_GRAY),
+            ("SSID",      info['ssid'] or "\u2014",       C_WHITE),
+            ("Cobertura", f"{info['signal_pct']}%" if info['signal_pct'] is not None else "\u2014", C_WHITE),
+            ("IP",        info['ip'] or "\u2014",          C_WHITE),
+        ]
+
+        y = 110
+        row_h = 55
+        col_label = 40
+        col_value = 240
+        for label, value, color in rows:
+            lbl = self.font_tab.render(label + ":", True, C_GRAY)
+            self.screen.blit(lbl, (col_label, y + (row_h - lbl.get_height()) // 2))
+            val = self.font_tab.render(value, True, color)
+            self.screen.blit(val, (col_value, y + (row_h - val.get_height()) // 2))
+            y += row_h
+
+        pygame.draw.line(self.screen, C_GRAY, (20, y + 10), (self.width - 20, y + 10), 2)
+        self.debug_close_btn.draw(self.screen, self.font_tab)
+        pygame.display.flip()
+
     def draw_confirmation_dialog(self):
-        """Draw confirmation dialog with cyberpunk style"""
-        # First draw the main screen behind it
         if self.locked:
             self.draw_lock_screen_base()
         else:
             self.draw_main_screen_base()
-        
-        # Semi-transparent overlay with tint
+
         overlay = pygame.Surface((self.width, self.height), pygame.SRCALPHA)
-        overlay.fill((10, 14, 39, 220))
+        overlay.fill((0, 0, 0, 200))
         self.screen.blit(overlay, (0, 0))
-        
-        # Dialog box with cyberpunk style
-        dialog_w = 225
-        dialog_h = 110
+
+        dialog_w = 450
+        dialog_h = 220
         dialog_x = (self.width - dialog_w) // 2
         dialog_y = (self.height - dialog_h) // 2
-        
-        # Background
-        pygame.draw.rect(self.screen, CYBER_DARK, (dialog_x, dialog_y, dialog_w, dialog_h))
-        
-        # Neon border with glow
-        for thickness in range(4, 0, -1):
-            alpha = 80 - thickness * 15
-            border_surf = pygame.Surface((dialog_w + thickness * 4, dialog_h + thickness * 4), pygame.SRCALPHA)
-            pygame.draw.rect(border_surf, (*CYBER_CYAN, alpha), border_surf.get_rect(), thickness)
-            self.screen.blit(border_surf, (dialog_x - thickness * 2, dialog_y - thickness * 2))
-        
-        pygame.draw.rect(self.screen, CYBER_CYAN, (dialog_x, dialog_y, dialog_w, dialog_h), 3)
-        
-        # Warning symbol
-        warning_y = dialog_y + 15
-        pygame.draw.polygon(self.screen, CYBER_YELLOW, [
-            (self.width // 2, warning_y),
-            (self.width // 2 - 8, warning_y + 13),
-            (self.width // 2 + 8, warning_y + 13)
-        ])
-        pygame.draw.circle(self.screen, CYBER_DARK, (self.width // 2, warning_y + 8), 2)
-        pygame.draw.line(self.screen, CYBER_DARK, (self.width // 2, warning_y + 4), (self.width // 2, warning_y + 6), 1)
-        
-        # Title
-        title = self.font_large.render(self.confirmation_dialog['title'], True, CYBER_CYAN)
-        title_rect = title.get_rect(center=(self.width // 2, dialog_y + 40))
-        self.screen.blit(title, title_rect)
-        
-        # Create buttons if not exist
+
+        pygame.draw.rect(self.screen, C_BG, (dialog_x, dialog_y, dialog_w, dialog_h))
+        pygame.draw.rect(self.screen, C_WHITE, (dialog_x, dialog_y, dialog_w, dialog_h), 3)
+
+        title = self.font_large.render(self.confirmation_dialog['title'], True, C_WHITE)
+        self.screen.blit(title, title.get_rect(center=(self.width // 2, dialog_y + 70)))
+
         if not hasattr(self, 'dialog_yes_btn'):
-            self.dialog_yes_btn = CyberButton(
-                (dialog_x + 30, dialog_y + 70, 70, 28),
-                "SÍ",
-                CYBER_GREEN,
-                None  # Action set dynamically
-            )
-            self.dialog_no_btn = CyberButton(
-                (dialog_x + 125, dialog_y + 70, 70, 28),
-                "NO",
-                CYBER_MAGENTA,
-                None  # Action set dynamically
-            )
-        
-        # Update button actions
+            self.dialog_yes_btn = SimpleButton((dialog_x + 60,  dialog_y + 140, 140, 55), "SI")
+            self.dialog_no_btn  = SimpleButton((dialog_x + 250, dialog_y + 140, 140, 55), "NO")
+
         self.dialog_yes_btn.action = self.confirmation_dialog['action']
-        self.dialog_no_btn.action = lambda: setattr(self, 'confirmation_dialog', None)
-        
-        # Draw buttons
+        self.dialog_no_btn.action  = lambda: setattr(self, 'confirmation_dialog', None)
+
         self.dialog_yes_btn.draw(self.screen, self.font)
         self.dialog_no_btn.draw(self.screen, self.font)
-        
+
         pygame.display.flip()
                     
     def handle_events(self):
@@ -556,49 +802,58 @@ class ArcadeControlApp:
             elif event.type == KEYDOWN:
                 if event.key == K_ESCAPE:
                     self.running = False
-            elif event.type == MOUSEBUTTONDOWN:
-                # If dialog is open, only handle dialog buttons
+            elif event.type in (MOUSEBUTTONDOWN, MOUSEMOTION, MOUSEBUTTONUP):
+                # If dialog is open, only handle dialog buttons (no motion needed)
                 if self.confirmation_dialog:
-                    if hasattr(self, 'dialog_yes_btn'):
-                        if self.dialog_yes_btn.handle_event(event):
-                            continue
-                        if self.dialog_no_btn.handle_event(event):
-                            continue
-                    return  # Don't process other buttons
-                
-                # Wake screen on any touch
-                if not self.screen_on:
-                    self.wake_screen()
-                    continue
-                    
-                # Handle button presses
-                if self.locked:
-                    for btn in self.numpad_buttons:
-                        btn.handle_event(event)
-                else:
-                    for btn in self.main_buttons:
-                        btn.handle_event(event)
-            elif event.type == MOUSEMOTION:
-                # Update hover states
-                if self.confirmation_dialog:
-                    if hasattr(self, 'dialog_yes_btn'):
+                    if event.type != MOUSEMOTION and hasattr(self, 'dialog_yes_btn'):
                         self.dialog_yes_btn.handle_event(event)
                         self.dialog_no_btn.handle_event(event)
-                elif self.locked:
-                    for btn in self.numpad_buttons:
-                        btn.handle_event(event)
+                    continue
+
+                # Debug screen: only the close button
+                if self.debug_screen:
+                    if event.type in (MOUSEBUTTONDOWN, MOUSEBUTTONUP):
+                        self.debug_close_btn.handle_event(event)
+                    continue
+
+                # Wake screen on any touch
+                if not self.screen_on:
+                    if event.type == MOUSEBUTTONDOWN:
+                        self.wake_screen()
+                    continue
+
+                # Lock screen: numpad (no motion handling needed)
+                if self.locked:
+                    if event.type != MOUSEMOTION:
+                        for btn in self.numpad_buttons:
+                            btn.handle_event(event)
                 else:
-                    for btn in self.main_buttons:
-                        btn.handle_event(event)
+                    # Tab bar and slot sub-tabs: simple tap only
+                    if event.type == MOUSEBUTTONDOWN:
+                        for btn in self.tab_buttons:
+                            if btn.handle_event(event):
+                                break
+                        if self.current_tab == 'partida':
+                            for btn in self.slot_buttons:
+                                if btn.handle_event(event):
+                                    break
+                    # Scrollable content (handles all mouse events incl. motion)
+                    self._active_scroll_menu().handle_event(event)
+
                         
     def run(self):
         """Main application loop"""
         while self.running:
             self.handle_events()
-            
+
+            if not self.locked and not self.confirmation_dialog and not self.debug_screen:
+                self._active_scroll_menu().update()
+
             # Draw appropriate screen
             if self.confirmation_dialog:
                 self.draw_confirmation_dialog()
+            elif self.debug_screen:
+                self.draw_debug_screen()
             elif self.locked:
                 self.draw_lock_screen()
             else:

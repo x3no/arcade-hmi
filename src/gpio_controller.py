@@ -3,8 +3,30 @@ GPIO Controller for Raspberry Pi Zero 2
 Controls optocoupler for external PC power control
 """
 
-import RPi.GPIO as GPIO
 import time
+
+try:
+    import RPi.GPIO as GPIO
+    _GPIO_AVAILABLE = True
+except ImportError:
+    _GPIO_AVAILABLE = False
+    print("[MOCK GPIO] RPi.GPIO not available, using mock")
+
+
+class _MockGPIO:
+    BCM = OUT = LOW = HIGH = 0
+    @staticmethod
+    def setmode(m): pass
+    @staticmethod
+    def setup(pin, mode): pass
+    @staticmethod
+    def output(pin, val): print(f"[MOCK GPIO] pin {pin} -> {val}")
+    @staticmethod
+    def cleanup(): pass
+
+
+if not _GPIO_AVAILABLE:
+    GPIO = _MockGPIO()
 
 
 class GPIOController:
