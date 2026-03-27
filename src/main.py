@@ -618,13 +618,16 @@ class ArcadeControlApp:
         }
 
     def do_update(self):
-        import subprocess
+        import subprocess, select
         self.confirmation_dialog = None
 
         repo_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
         try:
             env = os.environ.copy()
-            env['GIT_TERMINAL_PROMPT'] = '0'  # never prompt for credentials
+            env['GIT_TERMINAL_PROMPT'] = '0'
+            env['GIT_ASKPASS'] = '/bin/echo'
+            env['SSH_ASKPASS'] = '/bin/echo'
+            env['GIT_SSH_COMMAND'] = 'ssh -o StrictHostKeyChecking=no -o BatchMode=yes'
             proc = subprocess.Popen(
                 ['git', 'pull'],
                 cwd=repo_dir,
@@ -637,9 +640,9 @@ class ArcadeControlApp:
             self._show_update_result(False, str(e))
             return
 
-        # Keep pumping events so pygame stays responsive (ESC cancels wait)
-        dots = 0
+        last_line = "Iniciando..."
         start = pygame.time.get_ticks()
+
         while proc.poll() is None:
             for event in pygame.event.get():
                 if event.type == QUIT:
@@ -650,26 +653,40 @@ class ArcadeControlApp:
                     proc.terminate()
                     return
 
+            # Read any available output without blocking
+            r, _, _ = select.select([proc.stdout], [], [], 0)
+            if r:
+                raw = proc.stdout.readline()
+                if raw:
+                    last_line = raw.decode('utf-8', errors='ignore').strip()
+
             elapsed = (pygame.time.get_ticks() - start) // 500
-            label = "Actualizando" + "." * (elapsed % 4)
+            dots = "." * (elapsed % 4)
             self.screen.fill(C_BG)
-            msg = self.font.render(label, True, C_WHITE)
-            self.screen.blit(msg, msg.get_rect(center=(self.width // 2, self.height // 2)))
+            self.screen.blit(
+                self.font.render("Actualizando" + dots, True, C_WHITE),
+                self.font.render("Actualizando" + dots, True, C_WHITE).get_rect(
+                    center=(self.width // 2, self.height // 2 - 50))
+            )
+            self.screen.blit(
+                self.font_tab.render(last_line[:55], True, C_GRAY),
+                self.font_tab.render(last_line[:55], True, C_GRAY).get_rect(
+                    center=(self.width // 2, self.height // 2 + 20))
+            )
             pygame.display.flip()
             self.clock.tick(10)
 
             if pygame.time.get_ticks() - start > 30000:
                 proc.terminate()
-                self._show_update_result(False, "Timeout")
+                self._show_update_result(False, "Timeout (30s)")
                 return
 
-        stdout, _ = proc.communicate()
-        success = proc.returncode == 0
-        detail = (stdout or b'').decode('utf-8', errors='ignore').strip().splitlines()
-        line1 = detail[0] if detail else ('OK' if success else 'Error')
-        self._show_update_result(success, line1)
+        remaining = proc.stdout.read().decode('utf-8', errors='ignore').strip().splitlines()
+        all_lines = ([last_line] + remaining) if last_line != "Iniciando..." else remaining
+        line1 = all_lines[0] if all_lines else ('OK' if proc.returncode == 0 else 'Error')
+        self._show_update_result(proc.returncode == 0, line1)
 
-        if success:
+        if proc.returncode == 0:
             pygame.quit()
             os.execv(sys.executable, [sys.executable] + sys.argv)
 
