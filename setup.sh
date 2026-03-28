@@ -52,8 +52,9 @@ fi
 echo "Using boot path: $BOOT_PATH"
 
 # Add dwc2 overlay to config.txt if not present
+# dr_mode=peripheral forces device (gadget) mode; without it dwc2 may try host mode
 if ! grep -q "dtoverlay=dwc2" "$BOOT_PATH/config.txt"; then
-    echo "dtoverlay=dwc2" >> "$BOOT_PATH/config.txt"
+    echo "dtoverlay=dwc2,dr_mode=peripheral" >> "$BOOT_PATH/config.txt"
 fi
 
 # Add modules-load=dwc2 to cmdline.txt (required for RPi Zero 2W USB gadget mode)
@@ -178,36 +179,32 @@ systemctl daemon-reload
 systemctl enable usb-gadget-hid.service
 systemctl enable arcade-control.service
 
-# Disable unnecessary services for faster boot
+# Disable unnecessary services for faster boot (ignore if they don't exist)
 echo "Optimizing boot time..."
-systemctl disable bluetooth.service
-systemctl disable hciuart.service
-systemctl disable triggerhappy.service
-systemctl disable avahi-daemon.service
+for svc in bluetooth.service hciuart.service triggerhappy.service avahi-daemon.service; do
+    systemctl disable "$svc" 2>/dev/null || true
+done
 
 # Configure boot options for faster startup
-if ! grep -q "quiet" /boot/cmdline.txt; then
-    sed -i '$ s/$/ quiet/' /boot/cmdline.txt
+if ! grep -q "quiet" "$BOOT_PATH/cmdline.txt"; then
+    sed -i '$ s/$/ quiet/' "$BOOT_PATH/cmdline.txt"
 fi
-if ! grep -q "splash" /boot/cmdline.txt; then
-    sed -i '$ s/$/ splash/' /boot/cmdline.txt
-fi
-if ! grep -q "loglevel=3" /boot/cmdline.txt; then
-    sed -i '$ s/$/ loglevel=3/' /boot/cmdline.txt
+if ! grep -q "loglevel=3" "$BOOT_PATH/cmdline.txt"; then
+    sed -i '$ s/$/ loglevel=3/' "$BOOT_PATH/cmdline.txt"
 fi
 
 # Disable console blanking
-if ! grep -q "consoleblank=0" /boot/cmdline.txt; then
-    sed -i '$ s/$/ consoleblank=0/' /boot/cmdline.txt
+if ! grep -q "consoleblank=0" "$BOOT_PATH/cmdline.txt"; then
+    sed -i '$ s/$/ consoleblank=0/' "$BOOT_PATH/cmdline.txt"
 fi
 
 # Configure framebuffer
 echo "Configuring display..."
-if ! grep -q "framebuffer_width" /boot/config.txt; then
-    echo "framebuffer_width=800" >> /boot/config.txt
+if ! grep -q "framebuffer_width" "$BOOT_PATH/config.txt"; then
+    echo "framebuffer_width=800" >> "$BOOT_PATH/config.txt"
 fi
-if ! grep -q "framebuffer_height" /boot/config.txt; then
-    echo "framebuffer_height=480" >> /boot/config.txt
+if ! grep -q "framebuffer_height" "$BOOT_PATH/config.txt"; then
+    echo "framebuffer_height=480" >> "$BOOT_PATH/config.txt"
 fi
 
 echo ""
