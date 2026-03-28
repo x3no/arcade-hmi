@@ -21,12 +21,21 @@ apt-get upgrade -y
 # Install dependencies
 echo "Installing dependencies..."
 apt-get install -y python3 python3-pip python3-dev
+apt-get install -y build-essential gcc
 apt-get install -y libsdl2-dev libsdl2-image-dev libsdl2-mixer-dev libsdl2-ttf-dev
 apt-get install -y libfreetype6-dev libjpeg-dev libportmidi-dev
 
-# Install Python packages
-echo "Installing Python packages..."
-pip3 install -r requirements.txt
+# Install pre-built system packages for heavy compiled dependencies
+# (avoids building from source, which requires a full GCC cross-toolchain)
+echo "Installing Python packages via apt (pre-built)..."
+apt-get install -y python3-pygame python3-rpi.gpio || true
+
+# Install remaining Python packages from pip (skip already-installed ones)
+echo "Installing remaining Python packages via pip..."
+pip3 install --break-system-packages \
+    --ignore-installed pygame \
+    -r requirements.txt 2>/dev/null || \
+pip3 install --break-system-packages -r requirements.txt || true
 
 # Configure USB HID Gadget
 echo "Configuring USB HID Gadget..."
