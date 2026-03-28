@@ -12,7 +12,8 @@ import pygame
 from pygame.locals import *
 
 from config import Config
-from usb_hid import USBHID, KeyCode, Modifier
+from usb_hid import KeyCode, Modifier
+from bluetooth_hid import USBHID
 from gpio_controller import GPIOController
 from keyboard_mapper import ArcadeKeyMapper
 
@@ -342,6 +343,9 @@ class ArcadeControlApp:
             self.font_tab = pygame.font.Font(None, 42)
             self.font_slot = pygame.font.Font(None, 30)
 
+        # Monospace font for clock
+        self.font_mono = pygame.font.SysFont('monospace', 34)
+
         # Material Symbols icon font
         try:
             icon_path = os.path.join(os.path.dirname(__file__), 'fonts', 'MaterialSymbols.ttf')
@@ -459,8 +463,9 @@ class ArcadeControlApp:
         def make_scroll(y, h, btns):
             return ScrollMenu((0, y, self.width, h), btns, btn_w=340, btn_gap=20)
 
-        h_norm = self.height - CONT_Y    # 335
-        h_part = self.height - CONT_Y_P  # 285
+        CLOCK_H  = 50                        # space reserved at bottom for the clock
+        h_norm = self.height - CONT_Y - CLOCK_H
+        h_part = self.height - CONT_Y_P - CLOCK_H
 
         self.partida_general_btns = [
             SimpleButton((0,0,0,0), "PAUSAR",       action=self.pause_game,    icon='\ue034'),  # pause
@@ -853,6 +858,12 @@ class ArcadeControlApp:
 
         # Scrollable content area for active tab
         self._active_scroll_menu().draw(self.screen, self.font_action, self.font_icon_action)
+
+        # Clock — bottom center, monospace, gray
+        datetime_str = time.strftime('%d-%m-%Y  %H:%M:%S')
+        time_surf = self.font_mono.render(datetime_str, True, C_GRAY)
+        self.screen.blit(time_surf, time_surf.get_rect(
+            centerx=self.width // 2, centery=self.height - 120))
         
     def draw_main_screen(self):
         """Draw main control interface"""
@@ -961,26 +972,64 @@ class ArcadeControlApp:
         overlay.fill((0, 0, 0, 200))
         self.screen.blit(overlay, (0, 0))
 
-        dialog_w = 450
-        dialog_h = 220
+        # Dialog: 50% x 38% of screen
+        dialog_w = int(self.width * 0.50)
+        dialog_h = int(self.height * 0.38)
         dialog_x = (self.width - dialog_w) // 2
         dialog_y = (self.height - dialog_h) // 2
 
-        pygame.draw.rect(self.screen, C_BG, (dialog_x, dialog_y, dialog_w, dialog_h))
+        pygame.draw.rect(self.screen, C_DARK, (dialog_x, dialog_y, dialog_w, dialog_h))
         pygame.draw.rect(self.screen, C_WHITE, (dialog_x, dialog_y, dialog_w, dialog_h), 3)
 
-        title = self.font_large.render(self.confirmation_dialog['title'], True, C_WHITE)
-        self.screen.blit(title, title.get_rect(center=(self.width // 2, dialog_y + 70)))
+        # Lay out content (title + gap + buttons) centered inside the dialog
+        cx = self.width // 2
+        btn_w   = int(dialog_w * 0.36)
+        btn_h   = int(dialog_h * 0.30)
+        btn_gap = int(dialog_w * 0.08)
 
-        if not hasattr(self, 'dialog_yes_btn'):
-            self.dialog_yes_btn = SimpleButton((dialog_x + 60,  dialog_y + 140, 140, 55), "SI")
-            self.dialog_no_btn  = SimpleButton((dialog_x + 250, dialog_y + 140, 140, 55), "NO")
+        title_surf  = self.font.render(self.confirmation_dialog['title'], True, C_WHITE)
+        inner_gap   = int(dialog_h * 0.10)
+        total_h     = title_surf.get_height() + inner_gap + btn_h
+        content_top = dialog_y + (dialog_h - total_h) // 2
 
-        self.dialog_yes_btn.action = self.confirmation_dialog['action']
-        self.dialog_no_btn.action  = lambda: setattr(self, 'confirmation_dialog', None)
+        # Title
+        self.screen.blit(title_surf, title_surf.get_rect(
+            center=(cx, content_top + title_surf.get_height() // 2)))
 
-        self.dialog_yes_btn.draw(self.screen, self.font)
-        self.dialog_no_btn.draw(self.screen, self.font)
+        # Buttons
+        btn_y = content_top + title_surf.get_height() + inner_gap
+        total_btn_w = btn_w * 2 + btn_gap
+        btn_left_x  = dialog_x + (dialog_w - total_btn_w) // 2
+
+        self.dialog_yes_btn = SimpleButton(
+            (btn_left_x, btn_y, btn_w, btn_h), "SÍ",
+            action=self.confirmation_dialog['action'],
+        )
+        self.dialog_no_btn = SimpleButton(
+            (btn_left_x + btn_w + btn_gap, btn_y, btn_w, btn_h), "NO",
+            action=lambda: setattr(self, 'confirmation_dialog', None),
+        )
+
+        # Draw button shell without text, then render icon + text inline
+        for btn in (self.dialog_yes_btn, self.dialog_no_btn):
+            pygame.draw.rect(self.screen, C_BTN, btn.rect)
+
+        for btn, icon_cp, label in [
+            (self.dialog_yes_btn, '\ue876', 'SÍ'),
+            (self.dialog_no_btn,  '\ue5cd', 'NO'),
+        ]:
+            text_surf = self.font.render(label, True, C_WHITE)
+            if self.font_icon:
+                icon_surf = self.font_icon.render(icon_cp, True, C_WHITE)
+                gap = 10
+                total_w = icon_surf.get_width() + gap + text_surf.get_width()
+                x  = btn.rect.centerx - total_w // 2
+                cy = btn.rect.centery
+                self.screen.blit(icon_surf, (x, cy - icon_surf.get_height() // 2))
+                self.screen.blit(text_surf, (x + icon_surf.get_width() + gap,
+                                             cy - text_surf.get_height() // 2))
+            else:
+                self.screen.blit(text_surf, text_surf.get_rect(center=btn.rect.center))
 
         pygame.display.flip()
                     
@@ -995,11 +1044,15 @@ class ArcadeControlApp:
                 elif event.key == K_F1:
                     self.do_update()
             elif event.type in (MOUSEBUTTONDOWN, MOUSEMOTION, MOUSEBUTTONUP):
-                # If dialog is open, only handle dialog buttons (no motion needed)
+                # If dialog is open, fire action immediately on MOUSEBUTTONDOWN
                 if self.confirmation_dialog:
-                    if event.type != MOUSEMOTION and hasattr(self, 'dialog_yes_btn'):
-                        self.dialog_yes_btn.handle_event(event)
-                        self.dialog_no_btn.handle_event(event)
+                    if event.type == MOUSEBUTTONDOWN and hasattr(self, 'dialog_yes_btn'):
+                        if self.dialog_yes_btn.rect.collidepoint(event.pos):
+                            act = self.confirmation_dialog.get('action')
+                            if act:
+                                act()
+                        elif self.dialog_no_btn.rect.collidepoint(event.pos):
+                            self.confirmation_dialog = None
                     continue
 
                 # Debug screen: only the close button

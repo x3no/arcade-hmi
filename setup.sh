@@ -37,133 +37,57 @@ pip3 install --break-system-packages \
     -r requirements.txt 2>/dev/null || \
 pip3 install --break-system-packages -r requirements.txt || true
 
-# Configure USB HID Gadget
-echo "Configuring USB HID Gadget..."
+# Configure Bluetooth HID
+echo "Configuring Bluetooth HID (keyboard via Bluetooth to host PC)..."
 
-# Detect boot partition path (DietPi Bookworm uses /boot/firmware)
-if [ -f /boot/firmware/config.txt ]; then
-    BOOT_PATH="/boot/firmware"
-elif [ -f /boot/config.txt ]; then
-    BOOT_PATH="/boot"
-else
-    echo "ERROR: Cannot find config.txt in /boot/firmware or /boot"
-    exit 1
-fi
-echo "Using boot path: $BOOT_PATH"
+# Install Bluetooth packages
+apt-get install -y bluez bluez-tools
 
-# Add dwc2 overlay to config.txt if not present
-# dr_mode=peripheral forces device (gadget) mode; without it dwc2 may try host mode
-if ! grep -q "dtoverlay=dwc2" "$BOOT_PATH/config.txt"; then
-    echo "dtoverlay=dwc2,dr_mode=peripheral" >> "$BOOT_PATH/config.txt"
-fi
+# Configure BlueZ: advertise as HID keyboard, always discoverable
+cat > /etc/bluetooth/main.conf << 'BTEOF'
+[Policy]
+AutoEnable=true
 
-# Add modules-load=dwc2 to cmdline.txt (required for RPi Zero 2W USB gadget mode)
-if ! grep -q "modules-load=dwc2" "$BOOT_PATH/cmdline.txt"; then
-    # cmdline.txt must be a single line; append with sed
-    sed -i 's/$/ modules-load=dwc2/' "$BOOT_PATH/cmdline.txt"
-fi
+[General]
+Class = 0x002540
+DiscoverableTimeout = 0
+PairableTimeout = 0
+FastConnectable = true
+Name = Arcade HID Keyboard
+BTEOF
 
-# Add dwc2 and libcomposite to /etc/modules if not present
-if ! grep -q "^dwc2" /etc/modules; then
-    echo "dwc2" >> /etc/modules
-fi
-if ! grep -q "^libcomposite" /etc/modules; then
-    echo "libcomposite" >> /etc/modules
-fi
+# Enable bluetoothd in compat mode so sdptool can register the HID SDP record
+mkdir -p /etc/systemd/system/bluetooth.service.d/
+BLUETOOTHD=$(command -v bluetoothd 2>/dev/null || echo /usr/lib/bluetooth/bluetoothd)
+cat > /etc/systemd/system/bluetooth.service.d/compat.conf << BTEOF
+[Service]
+ExecStart=
+ExecStart=${BLUETOOTHD} -C --noplugin=sap
+BTEOF
 
-# Create USB HID gadget setup script
-cat > /usr/local/bin/usb-gadget-hid << 'EOF'
-#!/bin/bash
-# Configure USB HID Keyboard Gadget
-set -e
+# Install BT HID server
+cp src/bt_hid_server.py /usr/local/bin/bt-hid-server
+chmod +x /usr/local/bin/bt-hid-server
 
-# Load required kernel modules
-modprobe dwc2 || true
-modprobe libcomposite || true
-
-# Mount configfs if not already mounted
-if ! mountpoint -q /sys/kernel/config; then
-    mount -t configfs none /sys/kernel/config
-fi
-
-GADGET_DIR=/sys/kernel/config/usb_gadget/keyboard
-
-# Clean up any existing gadget configuration
-if [ -d "$GADGET_DIR" ]; then
-    pushd "$GADGET_DIR" > /dev/null
-    [ -s UDC ] && echo "" > UDC || true
-    find configs/ -maxdepth 2 -type l -exec rm {} \; 2>/dev/null || true
-    popd > /dev/null
-    rmdir "$GADGET_DIR/configs/c.1/strings/0x409" 2>/dev/null || true
-    rmdir "$GADGET_DIR/configs/c.1" 2>/dev/null || true
-    rmdir "$GADGET_DIR/functions/hid.usb0" 2>/dev/null || true
-    rmdir "$GADGET_DIR/strings/0x409" 2>/dev/null || true
-    rmdir "$GADGET_DIR" 2>/dev/null || true
-fi
-
-mkdir -p "$GADGET_DIR"
-cd "$GADGET_DIR"
-
-# USB Identifiers
-echo 0x1d6b > idVendor  # Linux Foundation
-echo 0x0104 > idProduct # Multifunction Composite Gadget
-echo 0x0100 > bcdDevice # v1.0.0
-echo 0x0200 > bcdUSB    # USB2
-
-# Strings
-mkdir -p strings/0x409
-echo "fedcba9876543210" > strings/0x409/serialnumber
-echo "Arcade Control" > strings/0x409/manufacturer
-echo "Arcade HID Keyboard" > strings/0x409/product
-
-# Configuration
-mkdir -p configs/c.1/strings/0x409
-echo "Config 1: HID Keyboard" > configs/c.1/strings/0x409/configuration
-echo 250 > configs/c.1/MaxPower
-
-# HID Keyboard Function
-mkdir -p functions/hid.usb0
-echo 1 > functions/hid.usb0/protocol
-echo 1 > functions/hid.usb0/subclass
-echo 8 > functions/hid.usb0/report_length
-
-# HID Report Descriptor (Keyboard, key codes 0x00-0xFF)
-# Changed Logical/Usage Maximum from 0x65 (101) to 0xFF (255) so that
-# key codes above 0x65 (e.g. Volume Up 0x80, Volume Down 0x81) are valid.
-echo -ne \\x05\\x01\\x09\\x06\\xa1\\x01\\x05\\x07\\x19\\xe0\\x29\\xe7\\x15\\x00\\x25\\x01\\x75\\x01\\x95\\x08\\x81\\x02\\x95\\x01\\x75\\x08\\x81\\x03\\x95\\x05\\x75\\x01\\x05\\x08\\x19\\x01\\x29\\x05\\x91\\x02\\x95\\x01\\x75\\x03\\x91\\x03\\x95\\x06\\x75\\x08\\x15\\x00\\x26\\xff\\x00\\x05\\x07\\x19\\x00\\x29\\xff\\x81\\x00\\xc0 > functions/hid.usb0/report_desc
-
-# Link function to configuration
-ln -s functions/hid.usb0 configs/c.1/
-
-# Activate gadget using the first available UDC
-UDC_NAME=$(ls /sys/class/udc 2>/dev/null | head -n1)
-if [ -z "$UDC_NAME" ]; then
-    echo "ERROR: No UDC found. Verify dwc2 is loaded and the OTG USB port is used (not the PWR port)."
-    exit 1
-fi
-echo "$UDC_NAME" > UDC
-echo "USB HID gadget activated on UDC: $UDC_NAME"
-EOF
-
-chmod +x /usr/local/bin/usb-gadget-hid
-
-# Create systemd service for USB gadget
-cat > /etc/systemd/system/usb-gadget-hid.service << 'EOF'
+# Create systemd service for BT HID server
+cat > /etc/systemd/system/bt-hid-server.service << 'BTEOF'
 [Unit]
-Description=USB HID Gadget
-After=local-fs.target
+Description=Bluetooth HID Keyboard Server
+After=bluetooth.service
+Wants=bluetooth.service
 Before=arcade-control.service
 
 [Service]
-Type=oneshot
-ExecStart=/usr/local/bin/usb-gadget-hid
-RemainAfterExit=yes
+Type=simple
+ExecStart=/usr/bin/python3 /usr/local/bin/bt-hid-server
+Restart=always
+RestartSec=5
 StandardOutput=journal
 StandardError=journal
 
 [Install]
 WantedBy=multi-user.target
-EOF
+BTEOF
 
 # Copy application to /root/arcade-control
 echo "Installing application..."
@@ -176,12 +100,13 @@ cp requirements.txt /root/arcade-control/
 echo "Installing systemd service..."
 cp systemd/arcade-control.service /etc/systemd/system/
 systemctl daemon-reload
-systemctl enable usb-gadget-hid.service
+systemctl enable bluetooth.service
+    systemctl enable bt-hid-server.service
 systemctl enable arcade-control.service
 
 # Disable unnecessary services for faster boot (ignore if they don't exist)
 echo "Optimizing boot time..."
-for svc in bluetooth.service hciuart.service triggerhappy.service avahi-daemon.service; do
+for svc in hciuart.service triggerhappy.service avahi-daemon.service; do
     systemctl disable "$svc" 2>/dev/null || true
 done
 
@@ -213,9 +138,11 @@ echo "Setup Complete!"
 echo "==================================="
 echo ""
 echo "Next steps:"
-echo "1. Connect the Pi Zero 2 USB data port to the target PC"
-echo "2. Reboot: sudo reboot"
-echo "3. The application will start automatically"
+echo "1. Reboot: sudo reboot"
+echo "2. After reboot, run the one-time Bluetooth pairing:"
+echo "     sudo ./bt-pair.sh"
+echo "3. Follow the instructions to pair from the host PC"
+echo "4. The app will start automatically; the host auto-reconnects on boot"
 echo ""
 echo "To view logs:"
 echo "  sudo journalctl -u arcade-control.service -f"

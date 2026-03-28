@@ -1,7 +1,6 @@
 {
   "pin": "1234",
   "gpio_power_pin": 17,
-  "hid_device": "/dev/hidg0",
   "screen_width": 1920,
   "screen_height": 1080,
   "screen_timeout": 300,

@@ -17,14 +17,15 @@ Aplicación de control táctil a pantalla completa para máquina arcade. Permite
 
 ### Hardware
 - Raspberry Pi Zero 2 W
-- Pantalla táctil compatible (800x480 recomendado)
+- Pantalla táctil USB (conectada al puerto USB de la Pi)
 - Optoacoplador conectado a GPIO17 (pin 11)
-- Cable USB OTG para conectar al PC objetivo
+- Host PC con Bluetooth (para recibir las pulsaciones de teclado)
 
 ### Software
-- Raspberry Pi OS Lite (sin entorno gráfico)
+- DietPi / Raspberry Pi OS Lite (sin entorno gráfico)
 - Python 3.7+
 - SDL2 y dependencias
+- BlueZ 5 (incluido en el sistema)
 
 ## 🚀 Instalación
 
@@ -131,10 +132,33 @@ GND (Pin 6)     -----> LED- (-)
 
 **Optoacoplador recomendado:** PC817, 4N35, o similar
 
-### Conexión USB
+### Conexión Bluetooth
 
-1. Conecta el puerto **USB data** (no el de alimentación) al PC objetivo
-2. La Raspberry Pi se identificará como teclado USB
+El puerto USB de la Pi queda libre para la pantalla táctil. Las pulsaciones de
+teclado se envían al PC mediante Bluetooth HID.
+
+```
+Pi Zero 2W
+  [USB OTG]   ──────────────────► Pantalla táctil (modo host)
+  [mini-HDMI] ──────────────────► Pantalla (vídeo)
+  [Bluetooth] ─ ─ ─ ─ ─ ─ ─ ─ ─► PC (teclado HID inalámbrico)
+  [GPIO 5V]   ◄─────────────────── Alimentación externa
+```
+
+#### Emparejamiento inicial (una sola vez)
+
+1. Asegúrate de que el Bluetooth del PC está activado
+2. En la Raspberry Pi ejecuta:
+   ```bash
+   sudo ./bt-pair.sh
+   ```
+3. En el PC abre los ajustes Bluetooth, busca **"Arcade HID Keyboard"** y haz clic en **Emparejar** (sin PIN)
+4. Una vez emparejado, el PC se reconectará automáticamente cada vez que arranque la Pi
+
+> Tras el emparejamiento, reinicia el servicio para que el host conecte:
+> ```bash
+> sudo systemctl restart bt-hid-server
+> ```
 
 ## 🎯 Uso
 
@@ -224,16 +248,22 @@ Valores válidos de `rotate`: `0`, `90`, `180`, `270`.
 
 > El táctil se puede rotar desde el propio menú físico de la pantalla, independientemente de la rotación del sistema.
 
-### USB HID no funciona
+### Bluetooth HID no funciona
 ```bash
-# Verificar dispositivo HID
-ls -l /dev/hidg0
+# Verificar que el servicio bt-hid-server está activo
+sudo systemctl status bt-hid-server
 
-# Verificar servicio
-sudo systemctl status usb-gadget-hid
+# Ver el log en tiempo real
+sudo journalctl -u bt-hid-server -f
 
-# Verificar que está en modo gadget
-lsusb
+# Verificar el adaptador BT
+hciconfig hci0
+
+# Listar dispositivos emparejados
+bluetoothctl paired-devices
+
+# Repetir el emparejamiento si es necesario
+sudo ./bt-pair.sh
 ```
 
 ### GPIO no responde
@@ -260,7 +290,9 @@ sudo evtest /dev/input/event0
 arcade-control/
 ├── src/
 │   ├── main.py              # Aplicación principal
-│   ├── usb_hid.py           # Control USB HID
+│   ├── bluetooth_hid.py     # Cliente Bluetooth HID (API compatible con USBHID)
+│   ├── bt_hid_server.py     # Servidor Bluetooth HID (daemon systemd)
+│   ├── usb_hid.py           # Keycodes y Modifiers HID
 │   ├── gpio_controller.py   # Control GPIO
 │   ├── keyboard_mapper.py   # Mapeo de teclas
 │   └── config.py            # Cargador de configuración
@@ -290,7 +322,7 @@ actions = [
 def mi_funcion(self):
     """Mi acción personalizada"""
     try:
-        with USBHID(self.config['hid_device']) as hid:
+        with USBHID() as hid:
             hid.send_key(KeyCode.KEY_X)
     except Exception as e:
         print(f"Error: {e}")
