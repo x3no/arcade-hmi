@@ -31,16 +31,33 @@ pip3 install -r requirements.txt
 # Configure USB HID Gadget
 echo "Configuring USB HID Gadget..."
 
+# Detect boot partition path (DietPi Bookworm uses /boot/firmware)
+if [ -f /boot/firmware/config.txt ]; then
+    BOOT_PATH="/boot/firmware"
+elif [ -f /boot/config.txt ]; then
+    BOOT_PATH="/boot"
+else
+    echo "ERROR: Cannot find config.txt in /boot/firmware or /boot"
+    exit 1
+fi
+echo "Using boot path: $BOOT_PATH"
+
 # Add dwc2 overlay to config.txt if not present
-if ! grep -q "dtoverlay=dwc2" /boot/config.txt; then
-    echo "dtoverlay=dwc2" >> /boot/config.txt
+if ! grep -q "dtoverlay=dwc2" "$BOOT_PATH/config.txt"; then
+    echo "dtoverlay=dwc2" >> "$BOOT_PATH/config.txt"
 fi
 
-# Add dwc2 and libcomposite to modules if not present
-if ! grep -q "dwc2" /etc/modules; then
+# Add modules-load=dwc2 to cmdline.txt (required for RPi Zero 2W USB gadget mode)
+if ! grep -q "modules-load=dwc2" "$BOOT_PATH/cmdline.txt"; then
+    # cmdline.txt must be a single line; append with sed
+    sed -i 's/$/ modules-load=dwc2/' "$BOOT_PATH/cmdline.txt"
+fi
+
+# Add dwc2 and libcomposite to /etc/modules if not present
+if ! grep -q "^dwc2" /etc/modules; then
     echo "dwc2" >> /etc/modules
 fi
-if ! grep -q "libcomposite" /etc/modules; then
+if ! grep -q "^libcomposite" /etc/modules; then
     echo "libcomposite" >> /etc/modules
 fi
 
@@ -48,10 +65,34 @@ fi
 cat > /usr/local/bin/usb-gadget-hid << 'EOF'
 #!/bin/bash
 # Configure USB HID Keyboard Gadget
+set -e
 
-cd /sys/kernel/config/usb_gadget/
-mkdir -p keyboard
-cd keyboard
+# Load required kernel modules
+modprobe dwc2 || true
+modprobe libcomposite || true
+
+# Mount configfs if not already mounted
+if ! mountpoint -q /sys/kernel/config; then
+    mount -t configfs none /sys/kernel/config
+fi
+
+GADGET_DIR=/sys/kernel/config/usb_gadget/keyboard
+
+# Clean up any existing gadget configuration
+if [ -d "$GADGET_DIR" ]; then
+    pushd "$GADGET_DIR" > /dev/null
+    [ -s UDC ] && echo "" > UDC || true
+    find configs/ -maxdepth 2 -type l -exec rm {} \; 2>/dev/null || true
+    popd > /dev/null
+    rmdir "$GADGET_DIR/configs/c.1/strings/0x409" 2>/dev/null || true
+    rmdir "$GADGET_DIR/configs/c.1" 2>/dev/null || true
+    rmdir "$GADGET_DIR/functions/hid.usb0" 2>/dev/null || true
+    rmdir "$GADGET_DIR/strings/0x409" 2>/dev/null || true
+    rmdir "$GADGET_DIR" 2>/dev/null || true
+fi
+
+mkdir -p "$GADGET_DIR"
+cd "$GADGET_DIR"
 
 # USB Identifiers
 echo 0x1d6b > idVendor  # Linux Foundation
@@ -76,14 +117,22 @@ echo 1 > functions/hid.usb0/protocol
 echo 1 > functions/hid.usb0/subclass
 echo 8 > functions/hid.usb0/report_length
 
-# HID Report Descriptor (Keyboard)
-echo -ne \\x05\\x01\\x09\\x06\\xa1\\x01\\x05\\x07\\x19\\xe0\\x29\\xe7\\x15\\x00\\x25\\x01\\x75\\x01\\x95\\x08\\x81\\x02\\x95\\x01\\x75\\x08\\x81\\x03\\x95\\x05\\x75\\x01\\x05\\x08\\x19\\x01\\x29\\x05\\x91\\x02\\x95\\x01\\x75\\x03\\x91\\x03\\x95\\x06\\x75\\x08\\x15\\x00\\x25\\x65\\x05\\x07\\x19\\x00\\x29\\x65\\x81\\x00\\xc0 > functions/hid.usb0/report_desc
+# HID Report Descriptor (Keyboard, key codes 0x00-0xFF)
+# Changed Logical/Usage Maximum from 0x65 (101) to 0xFF (255) so that
+# key codes above 0x65 (e.g. Volume Up 0x80, Volume Down 0x81) are valid.
+echo -ne \\x05\\x01\\x09\\x06\\xa1\\x01\\x05\\x07\\x19\\xe0\\x29\\xe7\\x15\\x00\\x25\\x01\\x75\\x01\\x95\\x08\\x81\\x02\\x95\\x01\\x75\\x08\\x81\\x03\\x95\\x05\\x75\\x01\\x05\\x08\\x19\\x01\\x29\\x05\\x91\\x02\\x95\\x01\\x75\\x03\\x91\\x03\\x95\\x06\\x75\\x08\\x15\\x00\\x26\\xff\\x00\\x05\\x07\\x19\\x00\\x29\\xff\\x81\\x00\\xc0 > functions/hid.usb0/report_desc
 
 # Link function to configuration
 ln -s functions/hid.usb0 configs/c.1/
 
-# Activate gadget
-ls /sys/class/udc > UDC
+# Activate gadget using the first available UDC
+UDC_NAME=$(ls /sys/class/udc 2>/dev/null | head -n1)
+if [ -z "$UDC_NAME" ]; then
+    echo "ERROR: No UDC found. Verify dwc2 is loaded and the OTG USB port is used (not the PWR port)."
+    exit 1
+fi
+echo "$UDC_NAME" > UDC
+echo "USB HID gadget activated on UDC: $UDC_NAME"
 EOF
 
 chmod +x /usr/local/bin/usb-gadget-hid
@@ -99,6 +148,8 @@ Before=arcade-control.service
 Type=oneshot
 ExecStart=/usr/local/bin/usb-gadget-hid
 RemainAfterExit=yes
+StandardOutput=journal
+StandardError=journal
 
 [Install]
 WantedBy=multi-user.target
