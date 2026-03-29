@@ -977,63 +977,28 @@ class ArcadeControlApp:
         self.bt_status_msg = ''
 
     def bt_activate_pairing(self):
-        import subprocess, glob, shutil, configparser
+        import subprocess, glob, shutil, time as _time
 
-        # ── Step 1: patch /etc/bluetooth/main.conf ───────────────────────────
-        # Add JustWorksRepairing=always so BlueZ accepts re-pairing without MITM
-        # even when Windows has a stale bond that demanded MITM.
-        self.bt_status_msg = 'Configurando main.conf...'
-        self.draw_bt_screen()
-        pygame.event.pump()
-        MAIN_CONF = '/etc/bluetooth/main.conf'
-        try:
-            cfg = configparser.ConfigParser(strict=False)
-            cfg.read(MAIN_CONF)
-            if not cfg.has_section('General'):
-                cfg.add_section('General')
-            cfg.set('General', 'JustWorksRepairing',  'always')
-            cfg.set('General', 'ClassicBondedOnly',    'false')
-            cfg.set('General', 'FastConnectable',      'true')
-            if not cfg.has_section('Policy'):
-                cfg.add_section('Policy')
-            cfg.set('Policy', 'AutoEnable', 'true')
-            import tempfile, os as _os
-            with tempfile.NamedTemporaryFile('w', delete=False, suffix='.conf') as tf:
-                cfg.write(tf)
-                tf_path = tf.name
-            r = subprocess.run(['sudo', 'cp', tf_path, MAIN_CONF],
-                               capture_output=True, timeout=5)
-            _os.unlink(tf_path)
-            if r.returncode != 0:
-                self.bt_status_msg = f'Error main.conf: {r.stderr.decode()[:60]}'
-                self.draw_bt_screen()
-                pygame.time.wait(2000)
-        except Exception as e:
-            self.bt_status_msg = f'Error main.conf: {e}'
-            self.draw_bt_screen()
-            pygame.time.wait(2000)
-
-        # ── Step 2: delete ALL stale link keys from Pi ───────────────────────
+        # ── Step 1: delete ALL stale link keys from Pi ───────────────────────
         self.bt_status_msg = 'Borrando claves de emparejamiento antiguas...'
         self.draw_bt_screen()
         pygame.event.pump()
         try:
             for dev_dir in glob.glob('/var/lib/bluetooth/*/*'):
-                # Each subdir under the adapter MAC is a bonded device's keys
-                if _os.path.isdir(dev_dir):
+                if os.path.isdir(dev_dir):
                     shutil.rmtree(dev_dir, ignore_errors=True)
-        except Exception as e:
+        except Exception:
             pass  # non-fatal
 
-        # ── Step 3: restart bluetoothd so it picks up main.conf changes ──────
+        # ── Step 2: restart bluetoothd to clear in-memory bond state ────────
         self.bt_status_msg = 'Reiniciando bluetoothd...'
         self.draw_bt_screen()
         pygame.event.pump()
         subprocess.run(['sudo', 'systemctl', 'restart', 'bluetooth'],
                        timeout=10, capture_output=True)
-        import time as _time; _time.sleep(1)
+        _time.sleep(1)
 
-        # ── Step 4: copy + restart bt-hid-server ─────────────────────────────
+        # ── Step 3: copy + restart bt-hid-server ─────────────────────────────
         repo_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
         src      = os.path.join(repo_dir, 'src', 'bt_hid_server.py')
         for cmd, label in [
@@ -1105,7 +1070,7 @@ class ArcadeControlApp:
         try:
             proc = subprocess.Popen(
                 ['btmon', '--no-pager'],
-                stdout=open(tmpf, 'w'), stderr=subprocess.STDOUT,
+                stdout=open(tmpf, 'wb'), stderr=subprocess.STDOUT,
             )
         except Exception as e:
             self.bt_status_msg = f'btmon no disponible: {e}'
@@ -1128,7 +1093,7 @@ class ArcadeControlApp:
         keywords = ('l2cap', 'psm', 'sdp', 'hid', 'conn req', 'conn rsp',
                     'security', 'auth', 'reject', 'refused', 'error', 'mgmt')
         try:
-            with open(tmpf) as f:
+            with open(tmpf, encoding='utf-8', errors='replace') as f:
                 for ln in f:
                     btmon_all.append(ln.rstrip())
                     if any(k in ln.lower() for k in keywords):
