@@ -58,7 +58,8 @@ HIDP_VIRTUAL_CABLE_UNPLUG = 0x05
 def _run(cmd):
     r = subprocess.run(cmd, capture_output=True, text=True, check=False)
     if r.returncode != 0:
-        log.warning(f"{cmd[0]} failed: {r.stderr.strip()}")
+        detail = (r.stderr or r.stdout).strip()
+        log.warning(f"{' '.join(cmd)} failed: {detail}")
     return r.returncode == 0
 
 
@@ -68,13 +69,27 @@ def setup_adapter():
     _run(['hciconfig', 'hci0', 'class', '0x002540'])   # Peripheral / Keyboard
     _run(['hciconfig', 'hci0', 'piscan'])               # discoverable + connectable
     _run(['hciconfig', 'hci0', 'name', 'Arcade HID Keyboard'])
-    # Register HID SDP record (requires bluetoothd -C compat mode)
-    _run(['sdptool', 'del', '0x00010001'])
-    ok = _run(['sdptool', 'add', '--handle=0x00010001', 'HID'])
-    if ok:
-        log.info("SDP HID record registered")
+
+    # Register HID SDP record.
+    # Requires bluetoothd -C (compat mode) — /var/run/sdp must exist.
+    # Wait up to 5 s for bluetoothd to create the socket.
+    sdp_socket = '/var/run/sdp'
+    for _ in range(10):
+        if os.path.exists(sdp_socket):
+            break
+        log.info("Waiting for bluetoothd compat socket /var/run/sdp...")
+        time.sleep(0.5)
+
+    if not os.path.exists(sdp_socket):
+        log.warning("bluetoothd compat socket not found — SDP record not registered. "
+                    "Ensure bluetoothd runs with -C flag.")
     else:
-        log.warning("sdptool failed — Windows may not recognise the keyboard profile")
+        _run(['sdptool', 'del', '0x00010001'])
+        if _run(['sdptool', 'add', '--handle=0x00010001', 'HID']):
+            log.info("SDP HID record registered")
+        else:
+            log.warning("sdptool add HID failed — Windows may not recognise the keyboard profile")
+
     log.info("BT adapter configured as HID keyboard")
 
 
