@@ -344,7 +344,12 @@ class ArcadeControlApp:
             self.font_slot = pygame.font.Font(None, 30)
 
         # Monospace font for clock
-        self.font_mono = pygame.font.SysFont('monospace', 34)
+        # Monospace font for clock — bundled with the project
+        try:
+            mono_path = os.path.join(os.path.dirname(__file__), 'fonts', 'NotoSansMono-Regular.ttf')
+            self.font_mono = pygame.font.Font(mono_path, 68)
+        except:
+            self.font_mono = pygame.font.SysFont('monospace', 68)
 
         # Material Symbols icon font
         try:
