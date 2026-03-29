@@ -21,6 +21,7 @@ import os
 import sys
 import time
 import socket
+import subprocess
 import threading
 import logging
 import signal
@@ -131,6 +132,16 @@ _SDP_RECORD = f"""<?xml version="1.0" encoding="UTF-8"?>
 
 # ── Adapter and SDP setup via BlueZ D-Bus ────────────────────────────────────
 
+def _diag(cmd):
+    """Run a shell command and log its output as INFO lines."""
+    try:
+        out = subprocess.check_output(cmd, stderr=subprocess.STDOUT, text=True, timeout=5)
+        for line in out.strip().splitlines():
+            log.info(f'  [diag] {line}')
+    except Exception as e:
+        log.info(f'  [diag] {" ".join(cmd)}: {e}')
+
+
 def setup_adapter():
     """
     Configure BT adapter properties and publish the HID SDP record using
@@ -140,6 +151,11 @@ def setup_adapter():
     NOT intercept L2CAP connections — our raw sockets handle those instead.
     This is more reliable than sdptool, which fails on BlueZ 5.x.
     """
+    log.info('=== bt-hid-server starting ===')
+    log.info(f'HAS_DBUS={HAS_DBUS}')
+    _diag(['hciconfig', 'hci0'])          # current adapter state
+    _diag(['bluetoothctl', 'show'])       # BlueZ view of the adapter
+
     if not HAS_DBUS:
         log.error('python3-dbus not available — cannot register SDP record')
         return
@@ -149,10 +165,17 @@ def setup_adapter():
         bus = dbus.SystemBus()
 
         # Set adapter properties via D-Bus (proper BlueZ API, not deprecated hciconfig)
-        adapter = dbus.Interface(
-            bus.get_object('org.bluez', '/org/bluez/hci0'),
-            'org.freedesktop.DBus.Properties',
-        )
+        adapter_obj = bus.get_object('org.bluez', '/org/bluez/hci0')
+        adapter = dbus.Interface(adapter_obj, 'org.freedesktop.DBus.Properties')
+
+        # Also set the Device Class (0x002540 = Peripheral / Keyboard) via hciconfig
+        # because org.bluez.Adapter1.Class is read-only in BlueZ 5.x
+        try:
+            subprocess.run(['hciconfig', 'hci0', 'class', '0x002540'], check=False)
+            log.info('Device class set to 0x002540 (Peripheral/Keyboard)')
+        except Exception as e:
+            log.warning(f'hciconfig class: {e}')
+
         for prop, val in [
             ('Powered',             dbus.Boolean(True)),
             ('Discoverable',        dbus.Boolean(True)),
@@ -163,8 +186,17 @@ def setup_adapter():
         ]:
             try:
                 adapter.Set('org.bluez.Adapter1', prop, val)
+                log.info(f'  adapter {prop} = {val}')
             except Exception as e:
-                log.warning(f'Set adapter {prop}: {e}')
+                log.warning(f'  Set adapter {prop} FAILED: {e}')
+
+        # Read back key properties to confirm they took effect
+        for prop in ('Address', 'Alias', 'Discoverable', 'Pairable', 'Class'):
+            try:
+                v = adapter.Get('org.bluez.Adapter1', prop)
+                log.info(f'  adapter readback {prop} = {v}')
+            except Exception as e:
+                log.warning(f'  readback {prop}: {e}')
 
         # Minimal Profile1 stub — BlueZ requires a D-Bus object at the profile path
         class _Profile(dbus.service.Object):
@@ -194,6 +226,13 @@ def setup_adapter():
             bus.get_object('org.bluez', '/org/bluez'),
             'org.bluez.ProfileManager1',
         )
+        # Unregister first in case a previous process crash left a stale
+        # registration (BlueZ may not have cleaned it up yet after restart).
+        try:
+            mgr.UnregisterProfile(DBUS_PROFILE_PATH)
+            log.info('Unregistered stale HID profile')
+        except Exception:
+            pass  # not registered — that's fine
         mgr.RegisterProfile(DBUS_PROFILE_PATH, HID_UUID, {
             'ServiceRecord':         dbus.String(_SDP_RECORD),
             'RequireAuthentication': dbus.Boolean(False),
@@ -206,8 +245,15 @@ def setup_adapter():
         loop = GLib.MainLoop()
         threading.Thread(target=loop.run, daemon=True).start()
 
+        # Confirm SDP record is visible via sdptool
+        time.sleep(0.5)
+        log.info('SDP records on local device:')
+        _diag(['sdptool', 'browse', 'local'])
+
     except Exception as e:
         log.error(f'D-Bus adapter setup failed: {e}')
+        import traceback
+        log.error(traceback.format_exc())
 
 
 # ── Main server class ───────────────────────────────────────────────────
@@ -227,33 +273,51 @@ class BTKeyboardServer:
         Must reply to SET_PROTOCOL / GET_PROTOCOL or Windows drops the link.
         Runs in its own thread so it doesn't block the interrupt channel.
         """
+        log.info('CTRL handler started')
         while True:
             try:
                 data = ctrl.recv(64)
                 if not data:          # graceful close
+                    log.info('CTRL: empty read — host closed control channel')
                     break
+                hex_data = data.hex()
                 msg   = data[0]
                 mtype = msg & 0xF0   # upper nibble = message type
                 param = msg & 0x0F   # lower nibble = parameter
 
                 if mtype == HIDP_SET_PROTOCOL:
-                    log.info(f"SET_PROTOCOL {'report' if param else 'boot'}")
+                    mode = 'report' if param else 'boot'
+                    log.info(f'CTRL RX SET_PROTOCOL({mode})  raw={hex_data}')
                     ctrl.send(bytes([HIDP_HANDSHAKE]))
+                    log.info(f'CTRL TX HANDSHAKE(0x00)')
 
                 elif mtype == HIDP_GET_PROTOCOL:
+                    log.info(f'CTRL RX GET_PROTOCOL  raw={hex_data}')
                     ctrl.send(bytes([HIDP_DATA | 0x01]))
+                    log.info(f'CTRL TX DATA(report_protocol=1)')
 
-                elif mtype in (HIDP_GET_REPORT, HIDP_SET_REPORT):
+                elif mtype == HIDP_GET_REPORT:
+                    log.info(f'CTRL RX GET_REPORT  raw={hex_data}')
                     ctrl.send(bytes([HIDP_HANDSHAKE]))
+                    log.info(f'CTRL TX HANDSHAKE(0x00)')
+
+                elif mtype == HIDP_SET_REPORT:
+                    log.info(f'CTRL RX SET_REPORT  raw={hex_data}')
+                    ctrl.send(bytes([HIDP_HANDSHAKE]))
+                    log.info(f'CTRL TX HANDSHAKE(0x00)')
 
                 elif mtype == HIDP_CONTROL:
                     if param == HIDP_VIRTUAL_UNPLUG:
-                        log.info('Virtual cable unplug')
+                        log.info(f'CTRL RX VIRTUAL_CABLE_UNPLUG  raw={hex_data}')
                         break
-                # other messages: silently ignore
+                    else:
+                        log.info(f'CTRL RX HIDP_CONTROL param={param:#x}  raw={hex_data}')
+
+                else:
+                    log.warning(f'CTRL RX unknown msg={msg:#04x} mtype={mtype:#x} param={param:#x}  raw={hex_data}')
 
             except OSError as e:
-                log.info(f"Control channel closed: {e}")
+                log.info(f'CTRL: OSError — {e}')
                 break
 
         # Signal disconnection by clearing the intr socket
@@ -269,21 +333,25 @@ class BTKeyboardServer:
         Starts ctrl_handler immediately after ctrl connects so Windows
         does not time out waiting for HANDSHAKE while we wait for intr.
         """
+        log.info(f'Opening L2CAP socket PSM {CTRL_PSM:#x} (control)...')
         ctrl_srv = socket.socket(
             socket.AF_BLUETOOTH, socket.SOCK_SEQPACKET, socket.BTPROTO_L2CAP)
+        log.info(f'Opening L2CAP socket PSM {INTR_PSM:#x} (interrupt)...')
         intr_srv = socket.socket(
             socket.AF_BLUETOOTH, socket.SOCK_SEQPACKET, socket.BTPROTO_L2CAP)
         try:
             ctrl_srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
             intr_srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
             ctrl_srv.bind((BDADDR_ANY, CTRL_PSM))
+            log.info(f'Bound control socket to PSM {CTRL_PSM:#x}')
             intr_srv.bind((BDADDR_ANY, INTR_PSM))
+            log.info(f'Bound interrupt socket to PSM {INTR_PSM:#x}')
             ctrl_srv.listen(1)
             intr_srv.listen(1)
-            log.info("Waiting for Bluetooth HID connection from host PC…")
+            log.info('Both L2CAP sockets listening — waiting for host PC connection...')
 
             ctrl_client, addr = ctrl_srv.accept()
-            log.info(f"Host connected (control) from {addr[0]}")
+            log.info(f'Host connected on CTRL PSM {CTRL_PSM:#x} from {addr[0]}')
             # Start ctrl handler NOW so Windows doesn't timeout waiting for replies
             threading.Thread(
                 target=self._ctrl_handler,
@@ -291,8 +359,9 @@ class BTKeyboardServer:
                 daemon=True,
             ).start()
 
-            intr_client, _ = intr_srv.accept()
-            log.info("Host connected (interrupt) — keyboard ready")
+            log.info(f'Waiting for host to open INTR PSM {INTR_PSM:#x}...')
+            intr_client, intr_addr = intr_srv.accept()
+            log.info(f'Host connected on INTR PSM {INTR_PSM:#x} from {intr_addr[0]} — keyboard ready!')
             return ctrl_client, intr_client
         finally:
             ctrl_srv.close()
