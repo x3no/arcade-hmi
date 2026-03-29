@@ -20,6 +20,7 @@ Requirements:
 import os
 import sys
 import time
+import queue
 import socket
 import subprocess
 import threading
@@ -48,8 +49,10 @@ INTR_PSM       = 0x13   # L2CAP PSM 19 — HID Interrupt (key reports sent here)
 BDADDR_ANY     = '00:00:00:00:00:00'
 
 # D-Bus identifiers for BlueZ HID profile registration
-DBUS_PROFILE_PATH = '/org/bluez/arcade_hid'
+DBUS_PROFILE_PATH = '/org/bluez/arcade_hid'       # HID control  PSM=17
+INTR_PROFILE_PATH = '/org/bluez/arcade_hid_intr'  # HID interrupt PSM=19
 HID_UUID          = '00001124-0000-1000-8000-00805f9b34fb'
+INTR_UUID         = 'bdc4e400-0000-1000-8000-00805f9b34fb'  # custom — just needs to be unique
 
 # Bluetooth HID report header byte
 HID_INPUT  = 0xA1
@@ -327,82 +330,75 @@ def setup_adapter():
         agent_mgr.RequestDefaultAgent(AGENT_PATH)
         log.info('[Agent] NoInputNoOutput agent registered as default — pairing will be auto-accepted')
 
-        # ── HID Profile ─────────────────────────────────────────────────────
-        # Minimal Profile1 stub — BlueZ requires a D-Bus object at the profile path
-        class _Profile(dbus.service.Object):
-            @dbus.service.method('org.bluez.Profile1',
-                                 in_signature='', out_signature='')
-            def Release(self): pass
+        # ── HID Profiles: registered WITH PSM so BlueZ routes L2CAP connections
+        # to NewConnection — bypasses kernel security block on PSM<0x1001 in BlueZ 5.65+.
 
-            @dbus.service.method('org.bluez.Profile1',
-                                 in_signature='oha{sv}', out_signature='')
+        class _CtrlProfile(dbus.service.Object):
+            @dbus.service.method('org.bluez.Profile1', in_signature='', out_signature='')
+            def Release(self): log.info('[CtrlProfile] Release')
+            @dbus.service.method('org.bluez.Profile1', in_signature='oha{sv}', out_signature='')
             def NewConnection(self, path, fd, props):
-                # This should NOT be called because we registered without a PSM
-                # (BlueZ should NOT intercept our raw L2CAP sockets).
-                # If it IS called it means BlueZ is routing the connection here
-                # instead of to our raw sockets — that would explain why nothing works.
                 raw_fd = fd.take()
-                log.warning(
-                    f'[Profile] NewConnection CALLED — BlueZ is intercepting L2CAP! '
-                    f'path={path} fd={raw_fd} props={dict(props)} '
-                    f'This is BAD — raw sockets will never see the connection.'
-                )
-                # Do NOT close the fd immediately; keep the connection alive
-                # long enough for the ctrl_handler to negotiate HIDP.
-                # Store it so the connection loop can pick it up.
+                log.info(f'[CtrlProfile] NewConnection fd={raw_fd} path={path}')
                 try:
-                    import socket as _socket
-                    conn = _socket.fromfd(raw_fd, _socket.AF_BLUETOOTH,
-                                          _socket.SOCK_SEQPACKET)
-                    os.close(raw_fd)   # fromfd dup'd it
-                    log.warning('[Profile] Stored D-Bus fd as ctrl socket; keyboard MAY work via this path')
-                    # Hand off to ctrl_handler if we have no ctrl yet
-                    if self._server._ctrl is None:
-                        threading.Thread(
-                            target=self._server._ctrl_handler,
-                            args=(conn,),
-                            daemon=True,
-                        ).start()
-                        with self._server._lock:
-                            self._server._ctrl = conn
-                    else:
-                        conn.close()
+                    sock = socket.fromfd(raw_fd, socket.AF_BLUETOOTH, socket.SOCK_SEQPACKET)
+                    sock.setblocking(True)
+                    self._queue.put(sock)
+                    log.info('[CtrlProfile] ctrl socket queued — HIDP negotiation will begin')
                 except Exception as e:
-                    log.error(f'[Profile] NewConnection fd handling failed: {e}')
-                    try:
-                        os.close(raw_fd)
-                    except Exception:
-                        pass
-
-            @dbus.service.method('org.bluez.Profile1',
-                                 in_signature='o', out_signature='')
+                    log.error(f'[CtrlProfile] fd wrap failed: {e}')
+                finally:
+                    try: os.close(raw_fd)
+                    except: pass
+            @dbus.service.method('org.bluez.Profile1', in_signature='o', out_signature='')
             def RequestDisconnection(self, path):
-                log.info(f'[Profile] RequestDisconnection path={path}')
+                log.info(f'[CtrlProfile] RequestDisconnection {path}')
 
-        profile_obj = _Profile(bus, DBUS_PROFILE_PATH)
-        profile_obj._server = None  # will be set by BTKeyboardServer after construction
+        class _IntrProfile(dbus.service.Object):
+            @dbus.service.method('org.bluez.Profile1', in_signature='', out_signature='')
+            def Release(self): log.info('[IntrProfile] Release')
+            @dbus.service.method('org.bluez.Profile1', in_signature='oha{sv}', out_signature='')
+            def NewConnection(self, path, fd, props):
+                raw_fd = fd.take()
+                log.info(f'[IntrProfile] NewConnection fd={raw_fd} path={path}')
+                try:
+                    sock = socket.fromfd(raw_fd, socket.AF_BLUETOOTH, socket.SOCK_SEQPACKET)
+                    sock.setblocking(True)
+                    self._queue.put(sock)
+                    log.info('[IntrProfile] intr socket queued — keyboard ready soon')
+                except Exception as e:
+                    log.error(f'[IntrProfile] fd wrap failed: {e}')
+                finally:
+                    try: os.close(raw_fd)
+                    except: pass
+            @dbus.service.method('org.bluez.Profile1', in_signature='o', out_signature='')
+            def RequestDisconnection(self, path):
+                log.info(f'[IntrProfile] RequestDisconnection {path}')
 
-        # RegisterProfile publishes the SDP record.
-        # No PSM key → BlueZ registers SDP only; our raw sockets accept L2CAP.
+        ctrl_profile = _CtrlProfile(bus, DBUS_PROFILE_PATH)
+        ctrl_profile._queue = None  # set by BTKeyboardServer.run()
+        intr_profile = _IntrProfile(bus, INTR_PROFILE_PATH)
+        intr_profile._queue = None  # set by BTKeyboardServer.run()
+
         mgr = dbus.Interface(
             bus.get_object('org.bluez', '/org/bluez'),
             'org.bluez.ProfileManager1',
         )
-        # Try to unregister first in case of a stale registration from a
-        # previous crash (BlueZ cleans up asynchronously, may not be done yet).
-        try:
-            mgr.UnregisterProfile(DBUS_PROFILE_PATH)
-            log.info('Unregistered stale HID profile')
-        except Exception:
-            pass  # not registered yet — fine
+        # Unregister stale profiles from any previous run
+        for _p in (DBUS_PROFILE_PATH, INTR_PROFILE_PATH):
+            try:
+                mgr.UnregisterProfile(_p)
+                log.info(f'Unregistered stale profile {_p}')
+            except Exception:
+                pass
 
-        # Retry loop: on a fast restart the old bus name might still be live
-        # in BlueZ for a moment even after UnregisterProfile.
+        # Register ctrl profile WITH PSM=17 + full SDP record
         last_err = None
         for attempt in range(6):
             try:
                 mgr.RegisterProfile(DBUS_PROFILE_PATH, HID_UUID, {
                     'ServiceRecord':         dbus.String(_SDP_RECORD),
+                    'PSM':                   dbus.UInt16(CTRL_PSM),
                     'RequireAuthentication': dbus.Boolean(False),
                     'RequireAuthorization':  dbus.Boolean(False),
                     'AutoConnect':           dbus.Boolean(False),
@@ -415,10 +411,24 @@ def setup_adapter():
                 time.sleep(2)
 
         if last_err:
-            log.error(f'RegisterProfile failed after all retries: {last_err}')
-            return None, None
+            log.error(f'RegisterProfile (ctrl) failed after all retries: {last_err}')
+            return None, None, None, None
 
-        log.info('HID SDP record registered via D-Bus — Windows will see keyboard profile')
+        log.info(f'Registered ctrl profile HID UUID PSM={CTRL_PSM:#x}')
+
+        # Register interrupt profile WITH PSM=19 (custom UUID, no SDP record)
+        try:
+            mgr.RegisterProfile(INTR_PROFILE_PATH, INTR_UUID, {
+                'PSM':                   dbus.UInt16(INTR_PSM),
+                'RequireAuthentication': dbus.Boolean(False),
+                'RequireAuthorization':  dbus.Boolean(False),
+                'AutoConnect':           dbus.Boolean(False),
+            })
+            log.info(f'Registered intr profile custom UUID PSM={INTR_PSM:#x}')
+        except dbus.exceptions.DBusException as e:
+            log.warning(f'RegisterProfile (intr) failed: {e}')
+
+        log.info('BlueZ profile registration complete — connections will arrive via NewConnection')
 
         # Run the GLib event loop in a daemon thread to keep D-Bus alive
         loop = GLib.MainLoop()
@@ -466,7 +476,7 @@ def setup_adapter():
         log.info(f'Verifying SDP via: sdptool browse {own_mac}')
         _diag(['sdptool', 'browse', own_mac])
 
-        return mgr, loop, bus, profile_obj
+        return mgr, loop, ctrl_profile, intr_profile
 
     except Exception as e:
         log.error(f'D-Bus adapter setup failed: {e}')
@@ -483,6 +493,8 @@ class BTKeyboardServer:
         self._intr = None
         self._ctrl = None
         self._lock = threading.Lock()
+        self._ctrl_queue = queue.Queue()
+        self._intr_queue = queue.Queue()
 
     # ── HIDP control channel handler ──────────────────────────────────────────
 
@@ -548,75 +560,26 @@ class BTKeyboardServer:
 
     def _accept_connection(self):
         """
-        Open L2CAP listeners on PSM 17+19, block until host connects.
-        Starts ctrl_handler immediately after ctrl connects so Windows
-        does not time out waiting for HANDSHAKE while we wait for intr.
+        Wait for BlueZ to deliver HID ctrl and intr sockets via D-Bus NewConnection.
+        BlueZ owns the L2CAP PSM listeners; we receive ready sockets via queues.
         """
-        log.info(f'Opening L2CAP socket PSM {CTRL_PSM:#x} (control)...')
-        ctrl_srv = socket.socket(
-            socket.AF_BLUETOOTH, socket.SOCK_SEQPACKET, socket.BTPROTO_L2CAP)
-        log.info(f'Opening L2CAP socket PSM {INTR_PSM:#x} (interrupt)...')
-        intr_srv = socket.socket(
-            socket.AF_BLUETOOTH, socket.SOCK_SEQPACKET, socket.BTPROTO_L2CAP)
+        log.info('Waiting for BlueZ to deliver HID ctrl (PSM 0x11) from Windows...')
+        ctrl = self._ctrl_queue.get()   # blocks until Windows connects on PSM 17
+        log.info(f'[+] HID ctrl connected (fd={ctrl.fileno()})! Starting HIDP handler...')
+        threading.Thread(target=self._ctrl_handler, args=(ctrl,), daemon=True).start()
+
+        log.info('Waiting for BlueZ to deliver HID intr (PSM 0x13) from Windows...')
         try:
-            import struct as _struct
-            # Kernel 5.10+ requires BT_SECURITY_LOW on L2CAP sockets for
-            # privileged PSMs (< 0x1001) before listen() — without it listen()
-            # returns EBADFD.  Must be set while socket is in OPEN state (before bind).
-            # struct bt_security { uint8 level; uint8 key_size; }
-            _bt_sec = _struct.pack('BB', 1, 0)  # BT_SECURITY_LOW=1, key_size=0
-            for _s, _name in ((ctrl_srv, 'ctrl'), (intr_srv, 'intr')):
-                try:
-                    _s.setsockopt(274, 4, _bt_sec)  # SOL_BLUETOOTH=274, BT_SECURITY=4
-                    log.info(f'{_name}: BT_SECURITY_LOW set OK')
-                except OSError as _e:
-                    log.warning(f'{_name}: BT_SECURITY setsockopt failed errno={_e.errno}: {_e}')
-                _s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-
+            intr = self._intr_queue.get(timeout=20)
+            log.info(f'[+] HID intr connected (fd={intr.fileno()}) — keyboard ready!')
+            return ctrl, intr
+        except queue.Empty:
+            log.warning('HID intr channel did not arrive within 20s — closing ctrl and retrying')
             try:
-                ctrl_srv.bind((BDADDR_ANY, CTRL_PSM))
-                log.info(f'Bound control socket to PSM {CTRL_PSM:#x}')
-            except Exception as e:
-                log.error(f'FAILED to bind control socket: {e}')
-                raise
-            try:
-                intr_srv.bind((BDADDR_ANY, INTR_PSM))
-                log.info(f'Bound interrupt socket to PSM {INTR_PSM:#x}')
-            except Exception as e:
-                log.error(f'FAILED to bind interrupt socket: {e}')
-                raise
-
-            try:
-                ctrl_srv.listen(1)
-                log.info(f'ctrl_srv.listen OK')
-            except OSError as e:
-                log.error(f'ctrl_srv.listen FAILED errno={e.errno}: {e}')
-                raise
-            try:
-                intr_srv.listen(1)
-                log.info(f'intr_srv.listen OK')
-            except OSError as e:
-                log.error(f'intr_srv.listen FAILED errno={e.errno}: {e}')
-                raise
-            log.info('Both L2CAP sockets listening — waiting for host PC connection...')
-
-            log.info(f'Blocking on ctrl_srv.accept() PSM {CTRL_PSM:#x}...')
-            ctrl_client, addr = ctrl_srv.accept()
-            log.info(f'Host connected on CTRL PSM {CTRL_PSM:#x} from {addr[0]}')
-            # Start ctrl handler NOW so Windows doesn't timeout waiting for replies
-            threading.Thread(
-                target=self._ctrl_handler,
-                args=(ctrl_client,),
-                daemon=True,
-            ).start()
-
-            log.info(f'Waiting for host to open INTR PSM {INTR_PSM:#x}...')
-            intr_client, intr_addr = intr_srv.accept()
-            log.info(f'Host connected on INTR PSM {INTR_PSM:#x} from {intr_addr[0]} — keyboard ready!')
-            return ctrl_client, intr_client
-        finally:
-            ctrl_srv.close()
-            intr_srv.close()
+                ctrl.close()
+            except Exception:
+                pass
+            raise OSError('HID intr channel timeout')
     def _connection_loop(self):
         """Background thread: accept connections, update active sockets."""
         while True:
@@ -698,9 +661,12 @@ class BTKeyboardServer:
             pass
 
     def run(self):
-        bt_mgr, bt_loop, bt_bus, bt_profile = setup_adapter()
-        if bt_profile is not None:
-            bt_profile._server = self  # let NewConnection hand off to us
+        bt_mgr, bt_loop, bt_ctrl_profile, bt_intr_profile = setup_adapter()
+        # Wire the queues so D-Bus NewConnection puts sockets where _accept_connection waits
+        if bt_ctrl_profile is not None:
+            bt_ctrl_profile._queue = self._ctrl_queue
+        if bt_intr_profile is not None:
+            bt_intr_profile._queue = self._intr_queue
 
         threading.Thread(target=self._connection_loop, daemon=True).start()
 
@@ -715,14 +681,13 @@ class BTKeyboardServer:
 
         def _shutdown(sig, frame):
             log.info("Shutting down…")
-            # Explicitly unregister the HID profile so BlueZ cleans it up
-            # immediately — prevents 'UUID already registered' on next start.
             if bt_mgr is not None:
-                try:
-                    bt_mgr.UnregisterProfile(DBUS_PROFILE_PATH)
-                    log.info('HID profile unregistered cleanly')
-                except Exception as e:
-                    log.warning(f'UnregisterProfile on shutdown: {e}')
+                for _p in (DBUS_PROFILE_PATH, INTR_PROFILE_PATH):
+                    try:
+                        bt_mgr.UnregisterProfile(_p)
+                        log.info(f'Profile {_p} unregistered')
+                    except Exception as e:
+                        log.warning(f'UnregisterProfile {_p}: {e}')
             if bt_loop is not None:
                 try:
                     bt_loop.quit()
