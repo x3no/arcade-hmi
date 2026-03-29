@@ -559,24 +559,45 @@ class BTKeyboardServer:
         intr_srv = socket.socket(
             socket.AF_BLUETOOTH, socket.SOCK_SEQPACKET, socket.BTPROTO_L2CAP)
         try:
-            for _s in (ctrl_srv, intr_srv):
+            import struct as _struct
+            # Kernel 5.10+ requires BT_SECURITY_LOW on L2CAP sockets for
+            # privileged PSMs (< 0x1001) before listen() — without it listen()
+            # returns EBADFD.  Must be set while socket is in OPEN state (before bind).
+            # struct bt_security { uint8 level; uint8 key_size; }
+            _bt_sec = _struct.pack('BB', 1, 0)  # BT_SECURITY_LOW=1, key_size=0
+            for _s, _name in ((ctrl_srv, 'ctrl'), (intr_srv, 'intr')):
+                try:
+                    _s.setsockopt(274, 4, _bt_sec)  # SOL_BLUETOOTH=274, BT_SECURITY=4
+                    log.info(f'{_name}: BT_SECURITY_LOW set OK')
+                except OSError as _e:
+                    log.warning(f'{_name}: BT_SECURITY setsockopt failed errno={_e.errno}: {_e}')
                 _s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+
             try:
                 ctrl_srv.bind((BDADDR_ANY, CTRL_PSM))
                 log.info(f'Bound control socket to PSM {CTRL_PSM:#x}')
             except Exception as e:
-                log.error(f'FAILED to bind control socket to PSM {CTRL_PSM:#x}: {e}')
+                log.error(f'FAILED to bind control socket: {e}')
                 raise
             try:
                 intr_srv.bind((BDADDR_ANY, INTR_PSM))
                 log.info(f'Bound interrupt socket to PSM {INTR_PSM:#x}')
             except Exception as e:
-                log.error(f'FAILED to bind interrupt socket to PSM {INTR_PSM:#x}: {e}')
+                log.error(f'FAILED to bind interrupt socket: {e}')
                 raise
-            intr_srv.bind((BDADDR_ANY, INTR_PSM))
-            log.info(f'Bound interrupt socket to PSM {INTR_PSM:#x}')
-            ctrl_srv.listen(1)
-            intr_srv.listen(1)
+
+            try:
+                ctrl_srv.listen(1)
+                log.info(f'ctrl_srv.listen OK')
+            except OSError as e:
+                log.error(f'ctrl_srv.listen FAILED errno={e.errno}: {e}')
+                raise
+            try:
+                intr_srv.listen(1)
+                log.info(f'intr_srv.listen OK')
+            except OSError as e:
+                log.error(f'intr_srv.listen FAILED errno={e.errno}: {e}')
+                raise
             log.info('Both L2CAP sockets listening — waiting for host PC connection...')
 
             log.info(f'Blocking on ctrl_srv.accept() PSM {CTRL_PSM:#x}...')
