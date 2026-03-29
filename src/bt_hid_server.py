@@ -150,6 +150,9 @@ def setup_adapter():
     Registering WITHOUT a PSM means BlueZ publishes the SDP record but does
     NOT intercept L2CAP connections — our raw sockets handle those instead.
     This is more reliable than sdptool, which fails on BlueZ 5.x.
+
+    Returns (mgr, loop) so the caller can do a clean unregister on shutdown.
+    Returns (None, None) on failure.
     """
     log.info('=== bt-hid-server starting ===')
     log.info(f'HAS_DBUS={HAS_DBUS}')
@@ -158,7 +161,7 @@ def setup_adapter():
 
     if not HAS_DBUS:
         log.error('python3-dbus not available — cannot register SDP record')
-        return
+        return None, None
 
     try:
         dbus.mainloop.glib.DBusGMainLoop(set_as_default=True)
@@ -226,19 +229,36 @@ def setup_adapter():
             bus.get_object('org.bluez', '/org/bluez'),
             'org.bluez.ProfileManager1',
         )
-        # Unregister first in case a previous process crash left a stale
-        # registration (BlueZ may not have cleaned it up yet after restart).
+        # Try to unregister first in case of a stale registration from a
+        # previous crash (BlueZ cleans up asynchronously, may not be done yet).
         try:
             mgr.UnregisterProfile(DBUS_PROFILE_PATH)
             log.info('Unregistered stale HID profile')
         except Exception:
-            pass  # not registered — that's fine
-        mgr.RegisterProfile(DBUS_PROFILE_PATH, HID_UUID, {
-            'ServiceRecord':         dbus.String(_SDP_RECORD),
-            'RequireAuthentication': dbus.Boolean(False),
-            'RequireAuthorization':  dbus.Boolean(False),
-            'AutoConnect':           dbus.Boolean(False),
-        })
+            pass  # not registered yet — fine
+
+        # Retry loop: on a fast restart the old bus name might still be live
+        # in BlueZ for a moment even after UnregisterProfile.
+        last_err = None
+        for attempt in range(6):
+            try:
+                mgr.RegisterProfile(DBUS_PROFILE_PATH, HID_UUID, {
+                    'ServiceRecord':         dbus.String(_SDP_RECORD),
+                    'RequireAuthentication': dbus.Boolean(False),
+                    'RequireAuthorization':  dbus.Boolean(False),
+                    'AutoConnect':           dbus.Boolean(False),
+                })
+                last_err = None
+                break
+            except dbus.exceptions.DBusException as e:
+                last_err = e
+                log.warning(f'RegisterProfile attempt {attempt+1}/6 failed: {e} — retrying in 2 s...')
+                time.sleep(2)
+
+        if last_err:
+            log.error(f'RegisterProfile failed after all retries: {last_err}')
+            return None, None
+
         log.info('HID SDP record registered via D-Bus — Windows will see keyboard profile')
 
         # Run the GLib event loop in a daemon thread to keep D-Bus alive
@@ -250,10 +270,13 @@ def setup_adapter():
         log.info('SDP records on local device:')
         _diag(['sdptool', 'browse', 'local'])
 
+        return mgr, loop
+
     except Exception as e:
         log.error(f'D-Bus adapter setup failed: {e}')
         import traceback
         log.error(traceback.format_exc())
+        return None, None
 
 
 # ── Main server class ───────────────────────────────────────────────────
@@ -428,7 +451,7 @@ class BTKeyboardServer:
             pass
 
     def run(self):
-        setup_adapter()
+        bt_mgr, bt_loop = setup_adapter()
 
         threading.Thread(target=self._connection_loop, daemon=True).start()
 
@@ -443,6 +466,19 @@ class BTKeyboardServer:
 
         def _shutdown(sig, frame):
             log.info("Shutting down…")
+            # Explicitly unregister the HID profile so BlueZ cleans it up
+            # immediately — prevents 'UUID already registered' on next start.
+            if bt_mgr is not None:
+                try:
+                    bt_mgr.UnregisterProfile(DBUS_PROFILE_PATH)
+                    log.info('HID profile unregistered cleanly')
+                except Exception as e:
+                    log.warning(f'UnregisterProfile on shutdown: {e}')
+            if bt_loop is not None:
+                try:
+                    bt_loop.quit()
+                except Exception:
+                    pass
             srv.close()
             if os.path.exists(UNIX_SOCK_PATH):
                 os.unlink(UNIX_SOCK_PATH)
