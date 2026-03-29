@@ -5,8 +5,6 @@
 #
 # Usage: sudo ./bt-pair.sh
 
-set -e
-
 if [[ $EUID -ne 0 ]]; then
     echo "ERROR: run as root: sudo $0"
     exit 1
@@ -19,18 +17,25 @@ echo "  Arcade HID Keyboard — Bluetooth Pairing  "
 echo "============================================"
 echo ""
 
-# Ensure adapter is up and advertised as keyboard
+# Ensure dbus and bluetoothd are running (needed for bluetoothctl)
+systemctl start dbus.service      2>/dev/null || true
+systemctl start bluetooth.service 2>/dev/null || true
+sleep 2
+
+# Bring up adapter
 hciconfig hci0 up          2>/dev/null || true
-hciconfig hci0 class 0x002540 2>/dev/null || true   # Peripheral/Keyboard
+hciconfig hci0 class 0x002540    2>/dev/null || true
 hciconfig hci0 name "Arcade HID Keyboard" 2>/dev/null || true
 
-# Configure BlueZ agent (NoInputNoOutput = no PIN needed)
-bluetoothctl power on
-bluetoothctl agent NoInputNoOutput
-bluetoothctl default-agent
-bluetoothctl discoverable on
-bluetoothctl pairable on
-bluetoothctl discoverable-timeout "$TIMEOUT"
+# Open a single bluetoothctl session to register agent + set discoverable
+bluetoothctl << 'BT_SETUP'
+power on
+agent NoInputNoOutput
+default-agent
+discoverable on
+pairable on
+discoverable-timeout 120
+BT_SETUP
 
 echo ""
 echo "The Pi is now visible as: 'Arcade HID Keyboard'"
@@ -41,34 +46,39 @@ echo "  2. Scan for new devices"
 echo "  3. Select 'Arcade HID Keyboard' and click Pair"
 echo "     (no PIN is required)"
 echo ""
-echo "Pairing window is open for ${TIMEOUT} seconds…"
+echo "Pairing window is open for ${TIMEOUT} seconds..."
 echo "Press Ctrl+C to cancel."
 echo ""
 
 # Poll until a device appears in the paired list
 END=$((SECONDS + TIMEOUT))
 while [ $SECONDS -lt $END ]; do
-    PAIRED=$(bluetoothctl paired-devices 2>/dev/null | head -n1)
+    PAIRED=$(bluetoothctl paired-devices 2>/dev/null | grep "^Device" | head -n1)
     if [ -n "$PAIRED" ]; then
         MAC=$(echo "$PAIRED"  | awk '{print $2}')
         NAME=$(echo "$PAIRED" | cut -d' ' -f3-)
-        echo ""
         echo "Paired with: $NAME  ($MAC)"
-        # Trust the device so it auto-connects without prompts
-        bluetoothctl trust "$MAC"
-        bluetoothctl discoverable off
-        bluetoothctl pairable off
+        # Trust the device so it auto-connects without prompts each boot
+        bluetoothctl << BT_TRUST
+trust $MAC
+discoverable off
+pairable off
+BT_TRUST
         echo ""
-        echo "Done! Restart bt-hid-server to allow the host to connect:"
-        echo "  sudo systemctl restart bt-hid-server"
+        echo "Done! Restarting bt-hid-server..."
+        systemctl restart bt-hid-server 2>/dev/null || true
+        echo "The host PC should now connect as a Bluetooth keyboard."
         exit 0
     fi
-    sleep 2
+    printf "."
+    sleep 3
 done
 
 echo ""
 echo "Timeout reached — no pairing detected."
 echo "Make sure Bluetooth is enabled on the host PC and try again."
-bluetoothctl discoverable off
-bluetoothctl pairable off
+bluetoothctl << 'BT_CANCEL'
+discoverable off
+pairable off
+BT_CANCEL
 exit 1
