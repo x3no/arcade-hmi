@@ -201,6 +201,74 @@ def setup_adapter():
             except Exception as e:
                 log.warning(f'  readback {prop}: {e}')
 
+        # ── Pairing agent ───────────────────────────────────────────────────
+        # Register a NoInputNoOutput agent so BlueZ auto-accepts pairing
+        # requests from Windows without requiring a PIN or confirmation.
+        # Without this, BlueZ rejects the pairing with 'No agent is registered'.
+        AGENT_PATH = '/org/bluez/arcade_agent'
+
+        class _Agent(dbus.service.Object):
+            @dbus.service.method('org.bluez.Agent1',
+                                 in_signature='', out_signature='')
+            def Release(self):
+                log.info('[Agent] Release called')
+
+            @dbus.service.method('org.bluez.Agent1',
+                                 in_signature='o', out_signature='s')
+            def RequestPinCode(self, device):
+                log.info(f'[Agent] RequestPinCode from {device} — returning empty')
+                return ''
+
+            @dbus.service.method('org.bluez.Agent1',
+                                 in_signature='os', out_signature='')
+            def DisplayPinCode(self, device, pincode):
+                log.info(f'[Agent] DisplayPinCode {pincode} for {device}')
+
+            @dbus.service.method('org.bluez.Agent1',
+                                 in_signature='o', out_signature='u')
+            def RequestPasskey(self, device):
+                log.info(f'[Agent] RequestPasskey from {device} — returning 0')
+                return dbus.UInt32(0)
+
+            @dbus.service.method('org.bluez.Agent1',
+                                 in_signature='ouq', out_signature='')
+            def DisplayPasskey(self, device, passkey, entered):
+                log.info(f'[Agent] DisplayPasskey {passkey} entered={entered} for {device}')
+
+            @dbus.service.method('org.bluez.Agent1',
+                                 in_signature='ou', out_signature='')
+            def RequestConfirmation(self, device, passkey):
+                log.info(f'[Agent] RequestConfirmation passkey={passkey} from {device} — auto-confirming')
+
+            @dbus.service.method('org.bluez.Agent1',
+                                 in_signature='o', out_signature='')
+            def RequestAuthorization(self, device):
+                log.info(f'[Agent] RequestAuthorization from {device} — auto-authorizing')
+
+            @dbus.service.method('org.bluez.Agent1',
+                                 in_signature='os', out_signature='')
+            def AuthorizeService(self, device, uuid):
+                log.info(f'[Agent] AuthorizeService uuid={uuid} from {device} — auto-authorizing')
+
+            @dbus.service.method('org.bluez.Agent1',
+                                 in_signature='', out_signature='')
+            def Cancel(self):
+                log.info('[Agent] Cancel called')
+
+        _Agent(bus, AGENT_PATH)
+        agent_mgr = dbus.Interface(
+            bus.get_object('org.bluez', '/org/bluez'),
+            'org.bluez.AgentManager1',
+        )
+        try:
+            agent_mgr.UnregisterAgent(AGENT_PATH)
+        except Exception:
+            pass
+        agent_mgr.RegisterAgent(AGENT_PATH, 'NoInputNoOutput')
+        agent_mgr.RequestDefaultAgent(AGENT_PATH)
+        log.info('[Agent] NoInputNoOutput agent registered as default — pairing will be auto-accepted')
+
+        # ── HID Profile ─────────────────────────────────────────────────────
         # Minimal Profile1 stub — BlueZ requires a D-Bus object at the profile path
         class _Profile(dbus.service.Object):
             @dbus.service.method('org.bluez.Profile1',
@@ -265,10 +333,47 @@ def setup_adapter():
         loop = GLib.MainLoop()
         threading.Thread(target=loop.run, daemon=True).start()
 
-        # Confirm SDP record is visible via sdptool
+        # Subscribe to BlueZ D-Bus signals to trace Windows connection attempts.
+        # These fire even if the L2CAP connection never reaches our raw sockets.
+        def _on_ifaces_added(path, ifaces):
+            if 'org.bluez.Device1' in ifaces:
+                props = ifaces['org.bluez.Device1']
+                addr  = props.get('Address', '?')
+                name  = props.get('Name', '?')
+                log.info(f'[BT-EVENT] Device appeared: {addr} name={name} path={path}')
+
+        def _on_props_changed(iface, changed, invalidated, sender=None):
+            if iface == 'org.bluez.Device1':
+                interesting = {'Connected', 'Paired', 'Trusted', 'Blocked',
+                               'ServicesResolved', 'LegacyPairing'}
+                filtered = {k: v for k, v in changed.items() if k in interesting}
+                if filtered:
+                    log.info(f'[BT-EVENT] Device1 props changed: {dict(filtered)}')
+            elif iface == 'org.bluez.Adapter1':
+                interesting = {'Discoverable', 'Pairable', 'Discovering'}
+                filtered = {k: v for k, v in changed.items() if k in interesting}
+                if filtered:
+                    log.info(f'[BT-EVENT] Adapter1 props changed: {dict(filtered)}')
+
+        bus.add_signal_receiver(
+            _on_ifaces_added,
+            dbus_interface='org.freedesktop.DBus.ObjectManager',
+            signal_name='InterfacesAdded',
+        )
+        bus.add_signal_receiver(
+            _on_props_changed,
+            dbus_interface='org.freedesktop.DBus.Properties',
+            signal_name='PropertiesChanged',
+            path_keyword='sender',
+        )
+        log.info('D-Bus BlueZ signal monitoring active')
+
+        # Verify SDP record is actually visible by browsing our own MAC
+        # ('sdptool browse local' is broken in BlueZ 5.x — use the real address)
         time.sleep(0.5)
-        log.info('SDP records on local device:')
-        _diag(['sdptool', 'browse', 'local'])
+        own_mac = str(adapter.Get('org.bluez.Adapter1', 'Address'))
+        log.info(f'Verifying SDP via: sdptool browse {own_mac}')
+        _diag(['sdptool', 'browse', own_mac])
 
         return mgr, loop
 

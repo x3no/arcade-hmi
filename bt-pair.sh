@@ -43,14 +43,14 @@ else
 fi
 echo ""
 
-# Open a single bluetoothctl session to register agent + set discoverable
+# bt-hid-server already registers a NoInputNoOutput pairing agent via D-Bus,
+# so we only need to ensure the adapter is discoverable/pairable here.
+# (Running 'agent' in bluetoothctl would conflict with the server's agent.)
 bluetoothctl << 'BT_SETUP'
 power on
-agent NoInputNoOutput
-default-agent
+discoverable-timeout 0
 discoverable on
 pairable on
-discoverable-timeout 0
 BT_SETUP
 
 echo ""
