@@ -101,7 +101,7 @@ echo "Installing systemd service..."
 cp systemd/arcade-control.service /etc/systemd/system/
 systemctl daemon-reload
 systemctl enable bluetooth.service
-    systemctl enable bt-hid-server.service
+systemctl enable bt-hid-server.service
 systemctl enable arcade-control.service
 
 # Disable unnecessary services for faster boot (ignore if they don't exist)
@@ -110,25 +110,35 @@ for svc in hciuart.service triggerhappy.service avahi-daemon.service; do
     systemctl disable "$svc" 2>/dev/null || true
 done
 
+# Detect boot partition path (DietPi Bookworm uses /boot/firmware)
+if [ -f /boot/firmware/config.txt ]; then
+    BOOT_PATH="/boot/firmware"
+elif [ -f /boot/config.txt ]; then
+    BOOT_PATH="/boot"
+else
+    echo "WARNING: Cannot find config.txt; skipping boot options configuration"
+    BOOT_PATH=""
+fi
+
 # Configure boot options for faster startup
-if ! grep -q "quiet" "$BOOT_PATH/cmdline.txt"; then
+if [ -n "$BOOT_PATH" ] && ! grep -q "quiet" "$BOOT_PATH/cmdline.txt"; then
     sed -i '$ s/$/ quiet/' "$BOOT_PATH/cmdline.txt"
 fi
-if ! grep -q "loglevel=3" "$BOOT_PATH/cmdline.txt"; then
+if [ -n "$BOOT_PATH" ] && ! grep -q "loglevel=3" "$BOOT_PATH/cmdline.txt"; then
     sed -i '$ s/$/ loglevel=3/' "$BOOT_PATH/cmdline.txt"
 fi
 
 # Disable console blanking
-if ! grep -q "consoleblank=0" "$BOOT_PATH/cmdline.txt"; then
+if [ -n "$BOOT_PATH" ] && ! grep -q "consoleblank=0" "$BOOT_PATH/cmdline.txt"; then
     sed -i '$ s/$/ consoleblank=0/' "$BOOT_PATH/cmdline.txt"
 fi
 
 # Configure framebuffer
 echo "Configuring display..."
-if ! grep -q "framebuffer_width" "$BOOT_PATH/config.txt"; then
+if [ -n "$BOOT_PATH" ] && ! grep -q "framebuffer_width" "$BOOT_PATH/config.txt"; then
     echo "framebuffer_width=800" >> "$BOOT_PATH/config.txt"
 fi
-if ! grep -q "framebuffer_height" "$BOOT_PATH/config.txt"; then
+if [ -n "$BOOT_PATH" ] && ! grep -q "framebuffer_height" "$BOOT_PATH/config.txt"; then
     echo "framebuffer_height=480" >> "$BOOT_PATH/config.txt"
 fi
 
