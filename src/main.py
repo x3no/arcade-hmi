@@ -383,6 +383,7 @@ class ArcadeControlApp:
         self.bt_data = {'devices': [], 'server_active': False}
         self.bt_status_msg = ''
         self.bt_logs = []
+        self.bt_log_scroll = 0   # lines scrolled from bottom (0 = show newest)
         self.bt_remove_buttons = []
         self.bt_activate_btn  = None
         self.bt_refresh_btn   = None
@@ -909,7 +910,8 @@ class ArcadeControlApp:
         lines_btd = _journal('bluetooth',     10)
         combined  = lines_hid + ['---'] + lines_btd + [' --- /proc/net/bluetooth/l2cap ---'] + l2cap_lines
         self.bt_logs = combined[-n:]
-
+        # Always save to /tmp so user can scp it
+        self._bt_save_log_file('refresh')
     def _bt_build_buttons(self):
         devices = self.bt_data.get('devices', [])
         ROW_H       = 110
@@ -1063,6 +1065,29 @@ class ArcadeControlApp:
         if len(diag_lines) == 1:
             diag_lines.append('(sin eventos L2CAP/SDP capturados)')
 
+        # bluetoothd service status + config dir
+        diag_lines.append('=== systemctl status bluetooth ===')
+        try:
+            r = subprocess.run(
+                ['systemctl', 'status', 'bluetooth', '--no-pager', '-l'],
+                capture_output=True, text=True, timeout=5,
+            )
+            for ln in (r.stdout + r.stderr).splitlines():
+                diag_lines.append(ln.rstrip()[:160])
+        except Exception as e:
+            diag_lines.append(f'systemctl status bluetooth: {e}')
+
+        diag_lines.append('=== /etc/bluetooth permissions ===')
+        try:
+            r = subprocess.run(
+                ['ls', '-la', '/etc/bluetooth', '/var/lib/bluetooth'],
+                capture_output=True, text=True, timeout=3,
+            )
+            for ln in r.stdout.splitlines():
+                diag_lines.append(ln.rstrip()[:160])
+        except Exception as e:
+            diag_lines.append(f'ls bluetooth dirs: {e}')
+
         # sdptool browse own MAC
         diag_lines.append('=== sdptool browse local ===')
         try:
@@ -1085,7 +1110,27 @@ class ArcadeControlApp:
             diag_lines.append(f'l2cap proc: {e}')
 
         self.bt_logs = diag_lines
-        self.bt_status_msg = f'Diagnóst. completo — {len(diag_lines)} líneas capturadas'
+        # Save full untruncated output to file
+        self._bt_save_log_file('diag', lines=diag_lines)
+        self.bt_status_msg = f'Diagnóst. completo — archivo: /tmp/arcade-bt-diag-*.log'
+
+    def _bt_save_log_file(self, tag='', lines=None):
+        """Write bt_logs to a timestamped file in /tmp."""
+        import datetime
+        ts   = datetime.datetime.now().strftime('%Y%m%d-%H%M%S')
+        path = f'/tmp/arcade-bt-{tag}-{ts}.log'
+        try:
+            with open(path, 'w') as f:
+                f.write('\n'.join(lines or self.bt_logs))
+                f.write('\n')
+            # Keep at most 10 files
+            import glob, os as _os
+            old = sorted(glob.glob('/tmp/arcade-bt-*.log'))[:-10]
+            for p in old:
+                try: _os.remove(p)
+                except: pass
+        except Exception:
+            pass
 
     def bt_pair(self):  # backwards compat
         self.open_bt_screen()
@@ -1153,15 +1198,20 @@ class ArcadeControlApp:
         # ── Log panel ────────────────────────────────────────────────────
         LOG_Y = max(510, ROW_Y_START + max(1, len(devices)) * ROW_H + 20)
         pygame.draw.line(self.screen, C_GRAY, (20, LOG_Y), (self.width - 20, LOG_Y), 1)
-        hdr_s = self.font_slot.render('LOGS  ·  bt-hid-server  (más reciente abajo)', True, C_GRAY)
-        self.screen.blit(hdr_s, (30, LOG_Y + 8))
-        line_h = 24
-        log_top = LOG_Y + 40
-        log_bot = self.height - 140
+        n_logs    = len(self.bt_logs)
+        line_h    = 24
+        log_top   = LOG_Y + 40
+        log_bot   = self.height - 140
         max_lines = max(1, (log_bot - log_top) // line_h)
-        # Show newest lines at the bottom (slice from end)
-        visible_logs = self.bt_logs[-max_lines:]
-        font_log = self.font_slot
+        # Clamp scroll so 0 = bottom (newest), positive = older
+        max_scroll = max(0, n_logs - max_lines)
+        self.bt_log_scroll = max(0, min(self.bt_log_scroll, max_scroll))
+        scroll = self.bt_log_scroll
+        visible_logs = self.bt_logs[max(0, n_logs - max_lines - scroll) : (n_logs - scroll) if scroll else n_logs]
+        # Header
+        hdr_text = f'LOGS ({n_logs} líneas)  ▲▼ scroll  — guardado en /tmp/arcade-bt-*.log'
+        self.screen.blit(self.font_slot.render(hdr_text, True, C_GRAY), (30, LOG_Y + 8))
+        # Lines
         y_log = log_top
         for ln in visible_logs:
             lc = (C_ORANGE
@@ -1171,8 +1221,15 @@ class ArcadeControlApp:
                   else (180, 255, 180)
                   if any(k in ln.lower() for k in ('connected', 'ready', 'registered', 'keyboard ready', 'listo'))
                   else C_GRAY)
-            self.screen.blit(font_log.render(ln[:160], True, lc), (30, y_log))
+            self.screen.blit(self.font_slot.render(ln[:160], True, lc), (30, y_log))
             y_log += line_h
+        # Scrollbar
+        if n_logs > max_lines:
+            sb_h   = log_bot - log_top
+            tb_h   = max(20, sb_h * max_lines // n_logs)
+            tb_y   = log_top + (sb_h - tb_h) * scroll // max(1, max_scroll)
+            pygame.draw.rect(self.screen, (60, 60, 80),  (self.width - 18, log_top, 10, sb_h), border_radius=5)
+            pygame.draw.rect(self.screen, (160, 160, 200), (self.width - 18, tb_y, 10, tb_h), border_radius=5)
 
         # ── Status message ───────────────────────────────────────────────
         if self.bt_status_msg:
@@ -1458,6 +1515,9 @@ class ArcadeControlApp:
                                     self.bt_diagnose_btn, self.bt_close_btn):
                             if btn:
                                 btn.handle_event(event)
+                    elif event.type == pygame.MOUSEWHEEL:
+                        self.bt_log_scroll = max(0, self.bt_log_scroll + event.y * -3)
+                        self.draw_bt_screen()
                     continue
 
                 # Wake screen on any touch

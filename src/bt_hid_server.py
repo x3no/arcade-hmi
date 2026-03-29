@@ -218,8 +218,21 @@ def setup_adapter():
     """
     log.info('=== bt-hid-server starting ===')
     log.info(f'HAS_DBUS={HAS_DBUS}')
+
+    # Fix the ConfigurationDirectory mode mismatch that causes bluetoothd to
+    # start in a degraded state.  systemd expects 0755 for ConfigurationDirectory
+    # but sometimes the directory ends up with wrong permissions after an update.
+    for _dir in ('/etc/bluetooth', '/var/lib/bluetooth'):
+        try:
+            current = oct(os.stat(_dir).st_mode & 0o777)
+            os.chmod(_dir, 0o755)
+            log.info(f'chmod 755 {_dir} (was {current})')
+        except Exception as e:
+            log.warning(f'chmod {_dir}: {e}')
+
     _diag(['hciconfig', 'hci0'])          # current adapter state
     _diag(['bluetoothctl', 'show'])       # BlueZ view of the adapter
+    _diag(['systemctl', 'status', 'bluetooth', '--no-pager', '-l'])  # bluetoothd health
 
     if not HAS_DBUS:
         log.error('python3-dbus not available — cannot register SDP record')
