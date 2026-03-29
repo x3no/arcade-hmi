@@ -868,7 +868,7 @@ class ArcadeControlApp:
         self._bt_fetch_logs()
         self._bt_build_buttons()
 
-    def _bt_fetch_logs(self, n=30):
+    def _bt_fetch_logs(self, n=40):
         import subprocess
         try:
             out = subprocess.check_output(
@@ -1065,14 +1065,17 @@ class ArcadeControlApp:
         # ── Log panel ────────────────────────────────────────────────────
         LOG_Y = max(510, ROW_Y_START + max(1, len(devices)) * ROW_H + 20)
         pygame.draw.line(self.screen, C_GRAY, (20, LOG_Y), (self.width - 20, LOG_Y), 1)
-        hdr_s = self.font_slot.render('LOGS  ·  bt-hid-server', True, C_GRAY)
+        hdr_s = self.font_slot.render('LOGS  ·  bt-hid-server  (más reciente abajo)', True, C_GRAY)
         self.screen.blit(hdr_s, (30, LOG_Y + 8))
         line_h = 24
-        y_log  = LOG_Y + 40
-        font_log = self.font_slot  # size-30 font — fits ~140 chars at 1920px wide
-        for ln in self.bt_logs:
-            if y_log + line_h > self.height - 140:
-                break
+        log_top = LOG_Y + 40
+        log_bot = self.height - 140
+        max_lines = max(1, (log_bot - log_top) // line_h)
+        # Show newest lines at the bottom (slice from end)
+        visible_logs = self.bt_logs[-max_lines:]
+        font_log = self.font_slot
+        y_log = log_top
+        for ln in visible_logs:
             lc = (C_ORANGE
                   if any(k in ln.lower() for k in ('error', 'fail', 'traceback', 'exception'))
                   else (255, 200, 80)

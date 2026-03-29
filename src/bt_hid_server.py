@@ -559,10 +559,31 @@ class BTKeyboardServer:
         intr_srv = socket.socket(
             socket.AF_BLUETOOTH, socket.SOCK_SEQPACKET, socket.BTPROTO_L2CAP)
         try:
-            ctrl_srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-            intr_srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-            ctrl_srv.bind((BDADDR_ANY, CTRL_PSM))
-            log.info(f'Bound control socket to PSM {CTRL_PSM:#x}')
+            import struct
+            # SOL_BLUETOOTH=274, BT_SECURITY=4, BT_SECURITY_LOW=1
+            # Required by BlueZ 5.x so the kernel accepts authenticated L2CAP
+            # connections on privileged PSMs (< 0x1001).  Without this the
+            # ACL link comes up but the PSM-level accept() never fires.
+            _BT_SEC = struct.pack('BB', 1, 0)  # BT_SECURITY_LOW, key_size=0
+            for _s in (ctrl_srv, intr_srv):
+                _s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+                try:
+                    _s.setsockopt(274, 4, _BT_SEC)
+                    log.info(f'Set BT_SECURITY_LOW on L2CAP socket')
+                except Exception as _e:
+                    log.warning(f'BT_SECURITY setsockopt: {_e} (continuing anyway)')
+            try:
+                ctrl_srv.bind((BDADDR_ANY, CTRL_PSM))
+                log.info(f'Bound control socket to PSM {CTRL_PSM:#x}')
+            except Exception as e:
+                log.error(f'FAILED to bind control socket to PSM {CTRL_PSM:#x}: {e}')
+                raise
+            try:
+                intr_srv.bind((BDADDR_ANY, INTR_PSM))
+                log.info(f'Bound interrupt socket to PSM {INTR_PSM:#x}')
+            except Exception as e:
+                log.error(f'FAILED to bind interrupt socket to PSM {INTR_PSM:#x}: {e}')
+                raise
             intr_srv.bind((BDADDR_ANY, INTR_PSM))
             log.info(f'Bound interrupt socket to PSM {INTR_PSM:#x}')
             ctrl_srv.listen(1)
