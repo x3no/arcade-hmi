@@ -27,6 +27,22 @@ hciconfig hci0 up          2>/dev/null || true
 hciconfig hci0 class 0x002540    2>/dev/null || true
 hciconfig hci0 name "Arcade HID Keyboard" 2>/dev/null || true
 
+# Start bt-hid-server so L2CAP PSM 17/19 are listening and SDP record is registered
+# Windows needs both to be ready BEFORE it tries to connect during pairing
+echo "Starting bt-hid-server (opens L2CAP listeners for Windows to connect to)..."
+systemctl start bt-hid-server 2>/dev/null || true
+sleep 4   # give the server time to open sockets and register SDP record
+
+if ! systemctl is-active --quiet bt-hid-server 2>/dev/null; then
+    echo "WARNING: bt-hid-server could not start. Check:"
+    echo "  sudo systemctl status bt-hid-server"
+    echo "  sudo journalctl -u bt-hid-server -n 30"
+    echo "Continuing anyway — pairing may fail."
+else
+    echo "bt-hid-server is running. SDP record registered."
+fi
+echo ""
+
 # Open a single bluetoothctl session to register agent + set discoverable
 bluetoothctl << 'BT_SETUP'
 power on
