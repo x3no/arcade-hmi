@@ -379,6 +379,13 @@ class ArcadeControlApp:
         self.pin_input = ""
         self.confirmation_dialog = None
         self.debug_screen = False
+        self.bt_screen = False
+        self.bt_data = {'devices': [], 'server_active': False}
+        self.bt_status_msg = ''
+        self.bt_remove_buttons = []
+        self.bt_activate_btn = None
+        self.bt_refresh_btn  = None
+        self.bt_close_btn    = None
         self.current_tab  = 'sistema'
         self.current_slot = 0  # 0 = general, 1-9 = save slots
 
@@ -501,7 +508,7 @@ class ArcadeControlApp:
                 SimpleButton((0,0,0,0), "BLOQUEAR",     action=self.lock_screen,       icon='\ue897'),  # lock
                 SimpleButton((0,0,0,0), "DEBUG",        action=self.open_debug,        icon='\ue868'),  # bug_report
                 SimpleButton((0,0,0,0), "UPDATE",       action=self.update_confirm,    icon='\ue923'),  # system_update
-                SimpleButton((0,0,0,0), "BLUETOOTH",    action=self.bt_pair,           icon='\ue1a8'),  # bluetooth
+                SimpleButton((0,0,0,0), "BLUETOOTH",    action=self.open_bt_screen,    icon='\ue1a8'),  # bluetooth
             ]),
             'sonido':   make_scroll(CONT_Y, h_norm, [
                 SimpleButton((0,0,0,0), "VOL +", action=self.volume_up,   icon='\ue050'),  # volume_up
@@ -815,57 +822,228 @@ class ArcadeControlApp:
     # ── Bluetooth pairing ─────────────────────────────────────────────────────
 
     def _draw_bt_status(self, msg, error=False):
-        """Render a full-screen BT status message."""
-        self.screen.fill(C_BG)
-        color = C_ORANGE if error else C_WHITE
-        if self.font_icon_action:
-            ic = self.font_icon_action.render('\ue1a8', True, color)  # bluetooth
-            self.screen.blit(ic, ic.get_rect(center=(self.width // 2, self.height // 2 - 100)))
-        y = self.height // 2
-        for line in msg.split('\n'):
-            surf = self.font.render(line, True, color)
-            self.screen.blit(surf, surf.get_rect(center=(self.width // 2, y)))
-            y += surf.get_height() + 10
-        pygame.display.flip()
+        pass  # kept for compat; full screen replaced by open_bt_screen
 
-    def bt_pair(self):
-        """
-        1. Copy latest bt_hid_server.py to /usr/local/bin/bt-hid-server
-        2. Restart the bt-hid-server systemd service
-        3. Show instructions for pairing from Windows
-        """
+    # ── Bluetooth management screen ──────────────────────────────────────
+
+    def _bt_load_data(self):
+        """Query bluetoothctl for paired devices and bt-hid-server status."""
+        import subprocess
+        devices = []
+        try:
+            out = subprocess.check_output(
+                ['bluetoothctl', 'paired-devices'],
+                timeout=6, stderr=subprocess.DEVNULL, text=True,
+            )
+            for line in out.strip().splitlines():
+                parts = line.split(' ', 2)
+                if len(parts) >= 2 and parts[0] == 'Device':
+                    mac  = parts[1]
+                    name = parts[2].strip() if len(parts) > 2 else mac
+                    connected = False
+                    try:
+                        info = subprocess.check_output(
+                            ['bluetoothctl', 'info', mac],
+                            timeout=4, stderr=subprocess.DEVNULL, text=True,
+                        )
+                        connected = 'Connected: yes' in info
+                    except Exception:
+                        pass
+                    devices.append({'mac': mac, 'name': name, 'connected': connected})
+        except Exception:
+            pass
+
+        server_active = False
+        try:
+            r = subprocess.run(
+                ['systemctl', 'is-active', 'bt-hid-server'],
+                timeout=4, capture_output=True, text=True,
+            )
+            server_active = r.stdout.strip() == 'active'
+        except Exception:
+            pass
+
+        self.bt_data = {'devices': devices, 'server_active': server_active}
+        self._bt_build_buttons()
+
+    def _bt_build_buttons(self):
+        devices = self.bt_data.get('devices', [])
+        ROW_H       = 110
+        ROW_Y_START = 185
+        BTN_W       = 260
+        BTN_H       = 72
+
+        self.bt_remove_buttons = []
+        for i, dev in enumerate(devices):
+            y   = ROW_Y_START + i * ROW_H
+            mac = dev['mac']
+            btn = SimpleButton(
+                (self.width - BTN_W - 30, y + (ROW_H - BTN_H) // 2, BTN_W, BTN_H),
+                'DESEMPAREJAR',
+                action=lambda m=mac: self.bt_remove_device(m),
+                icon='\ue872',   # delete
+            )
+            self.bt_remove_buttons.append(btn)
+
+        # Bottom row: activate + refresh + close
+        btn_h = 90
+        btn_y = self.height - btn_h - 25
+        btn_w = 360
+        gap   = 24
+        n     = 3
+        total_w = n * btn_w + (n - 1) * gap
+        x = (self.width - total_w) // 2
+
+        self.bt_activate_btn = SimpleButton(
+            (x, btn_y, btn_w, btn_h), 'ACTIVAR EMPAREJAMIENTO',
+            action=self.bt_activate_pairing, icon='\ue1a8',
+        )
+        self.bt_refresh_btn = SimpleButton(
+            (x + btn_w + gap, btn_y, btn_w, btn_h), 'ACTUALIZAR',
+            action=self.bt_refresh, icon='\ue5d5',
+        )
+        self.bt_close_btn = SimpleButton(
+            (x + 2 * (btn_w + gap), btn_y, btn_w, btn_h), 'CERRAR',
+            action=self.close_bt_screen, icon='\ue5cd',
+        )
+
+    def open_bt_screen(self):
+        self.bt_screen    = True
+        self.bt_status_msg = 'Cargando...'
+        self.draw_bt_screen()
+        self._bt_load_data()
+        self.bt_status_msg = ''
+
+    def close_bt_screen(self):
+        self.bt_screen    = False
+        self.bt_status_msg = ''
+
+    def bt_refresh(self):
+        self.bt_status_msg = 'Actualizando...'
+        self.draw_bt_screen()
+        pygame.event.pump()
+        self._bt_load_data()
+        self.bt_status_msg = ''
+
+    def bt_activate_pairing(self):
         import subprocess
         repo_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-        src = os.path.join(repo_dir, 'src', 'bt_hid_server.py')
+        src      = os.path.join(repo_dir, 'src', 'bt_hid_server.py')
 
-        steps = [
-            (['sudo', 'cp', src, '/usr/local/bin/bt-hid-server'],
-             'Copiando servidor BT...'),
-            (['sudo', 'systemctl', 'restart', 'bt-hid-server'],
-             'Reiniciando servicio BT...'),
-        ]
-
-        for cmd, label in steps:
-            self._draw_bt_status(label)
-            # Pump events so the display doesn't freeze
+        for cmd, label in [
+            (['sudo', 'cp', src, '/usr/local/bin/bt-hid-server'], 'Copiando servidor BT...'),
+            (['sudo', 'systemctl', 'restart', 'bt-hid-server'],   'Reiniciando servicio BT...'),
+        ]:
+            self.bt_status_msg = label
+            self.draw_bt_screen()
             pygame.event.pump()
             try:
-                result = subprocess.run(cmd, timeout=15, capture_output=True)
-                if result.returncode != 0:
-                    err = result.stderr.decode('utf-8', errors='ignore').strip()
-                    self._draw_bt_status(f'Error:\n{err[:60] or " ".join(cmd)}', error=True)
-                    pygame.time.wait(3500)
+                r = subprocess.run(cmd, timeout=15, capture_output=True)
+                if r.returncode != 0:
+                    err = r.stderr.decode('utf-8', errors='ignore').strip()
+                    self.bt_status_msg = f'Error: {err[:70] or " ".join(cmd)}'
+                    self.draw_bt_screen()
+                    pygame.time.wait(3000)
+                    self._bt_load_data()
                     return
             except Exception as e:
-                self._draw_bt_status(f'Error:\n{e}', error=True)
-                pygame.time.wait(3500)
+                self.bt_status_msg = f'Error: {e}'
+                self.draw_bt_screen()
+                pygame.time.wait(3000)
+                self._bt_load_data()
                 return
 
-        self._draw_bt_status(
-            'Listo — empareja desde Windows\n'
-            'Bluetooth → Arcade HID Keyboard'
-        )
-        pygame.time.wait(4000)
+        self.bt_status_msg = '✓ Listo — busca Arcade HID Keyboard en Windows'
+        self._bt_load_data()
+
+    def bt_remove_device(self, mac):
+        import subprocess
+        self.bt_status_msg = f'Desemparejando {mac}...'
+        self.draw_bt_screen()
+        pygame.event.pump()
+        try:
+            subprocess.run(['bluetoothctl', 'remove', mac], timeout=8, capture_output=True)
+            self.bt_status_msg = f'✓ Dispositivo {mac} eliminado'
+        except Exception as e:
+            self.bt_status_msg = f'Error: {e}'
+        self._bt_load_data()
+
+    def bt_pair(self):  # backwards compat
+        self.open_bt_screen()
+
+    def draw_bt_screen(self):
+        self.screen.fill(C_BG)
+
+        # ── Header ───────────────────────────────────────────────────
+        title = self.font.render('BLUETOOTH', True, C_WHITE)
+        self.screen.blit(title, title.get_rect(centerx=self.width // 2, top=18))
+
+        srv_ok    = self.bt_data.get('server_active', False)
+        srv_color = C_WHITE if srv_ok else C_GRAY
+        srv_text  = '● SERVIDOR ACTIVO' if srv_ok else '○ SERVIDOR INACTIVO'
+        srv_surf  = self.font_action.render(srv_text, True, srv_color)
+        self.screen.blit(srv_surf, (30, 28))
+
+        pygame.draw.line(self.screen, C_GRAY, (20, 105), (self.width - 20, 105), 2)
+
+        # ── Column headers ────────────────────────────────────────────
+        for text, x in [('DISPOSITIVO', 80), ('MAC', 520), ('ESTADO', 870)]:
+            self.screen.blit(self.font_slot.render(text, True, C_GRAY), (x, 112))
+        pygame.draw.line(self.screen, C_GRAY, (20, 155), (self.width - 20, 155), 1)
+
+        # ── Device rows ───────────────────────────────────────────────
+        ROW_H       = 110
+        ROW_Y_START = 158
+        devices     = self.bt_data.get('devices', [])
+
+        if not devices:
+            s = self.font_tab.render('No hay dispositivos emparejados', True, C_GRAY)
+            self.screen.blit(s, s.get_rect(centerx=self.width // 2, top=230))
+        else:
+            for i, dev in enumerate(devices):
+                y  = ROW_Y_START + i * ROW_H
+                cy = y + ROW_H // 2
+
+                if i % 2 == 0:
+                    pygame.draw.rect(self.screen, (15, 15, 30), (0, y, self.width, ROW_H))
+
+                # BT icon + name
+                x_icon = 30
+                if self.font_icon_sm:
+                    ic = self.font_icon_sm.render('\ue1a8', True, C_WHITE)
+                    self.screen.blit(ic, (x_icon, cy - ic.get_height() // 2))
+                    x_icon += ic.get_width() + 8
+                name_s = self.font_tab.render(dev['name'][:26], True, C_WHITE)
+                self.screen.blit(name_s, (x_icon, cy - name_s.get_height() // 2))
+
+                # MAC
+                mac_s = self.font_action.render(dev['mac'], True, C_GRAY)
+                self.screen.blit(mac_s, (520, cy - mac_s.get_height() // 2))
+
+                # Connection badge
+                if dev['connected']:
+                    badge_s = self.font_action.render('● CONECTADO',    True, C_WHITE)
+                else:
+                    badge_s = self.font_action.render('○ NO CONECTADO', True, C_GRAY)
+                self.screen.blit(badge_s, (870, cy - badge_s.get_height() // 2))
+
+                # Remove button
+                if i < len(self.bt_remove_buttons):
+                    self.bt_remove_buttons[i].draw(self.screen, self.font_action, self.font_icon_sm)
+
+        # ── Status message ───────────────────────────────────────────────
+        if self.bt_status_msg:
+            color = C_ORANGE if self.bt_status_msg.startswith('Error') else C_WHITE
+            msg_s = self.font_tab.render(self.bt_status_msg[:70], True, color)
+            self.screen.blit(msg_s, msg_s.get_rect(
+                centerx=self.width // 2, bottom=self.height - 130))
+
+        # ── Bottom buttons ───────────────────────────────────────────────
+        for btn in (self.bt_activate_btn, self.bt_refresh_btn, self.bt_close_btn):
+            if btn:
+                btn.draw(self.screen, self.font_action, self.font_icon_sm)
+
+        pygame.display.flip()
     
     def draw_cyberpunk_bg(self):
         pass
@@ -1127,6 +1305,16 @@ class ArcadeControlApp:
                         self.debug_close_btn.handle_event(event)
                     continue
 
+                # BT management screen
+                if self.bt_screen:
+                    if event.type in (MOUSEBUTTONDOWN, MOUSEBUTTONUP):
+                        for btn in self.bt_remove_buttons:
+                            btn.handle_event(event)
+                        for btn in (self.bt_activate_btn, self.bt_refresh_btn, self.bt_close_btn):
+                            if btn:
+                                btn.handle_event(event)
+                    continue
+
                 # Wake screen on any touch
                 if not self.screen_on:
                     if event.type == MOUSEBUTTONDOWN:
@@ -1157,7 +1345,7 @@ class ArcadeControlApp:
         while self.running:
             self.handle_events()
 
-            if not self.locked and not self.confirmation_dialog and not self.debug_screen:
+            if not self.locked and not self.confirmation_dialog and not self.debug_screen and not self.bt_screen:
                 self._active_scroll_menu().update()
 
             # Draw appropriate screen
@@ -1165,6 +1353,8 @@ class ArcadeControlApp:
                 self.draw_confirmation_dialog()
             elif self.debug_screen:
                 self.draw_debug_screen()
+            elif self.bt_screen:
+                self.draw_bt_screen()
             elif self.locked:
                 self.draw_lock_screen()
             else:
