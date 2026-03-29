@@ -1007,15 +1007,32 @@ class ArcadeControlApp:
         self._bt_load_data()
 
     def bt_remove_device(self, mac):
-        import subprocess
+        import subprocess, glob, shutil
         self.bt_status_msg = f'Desemparejando {mac}...'
         self.draw_bt_screen()
         pygame.event.pump()
+        errors = []
+        # 1) BlueZ logical remove
         try:
             subprocess.run(['bluetoothctl', 'remove', mac], timeout=8, capture_output=True)
-            self.bt_status_msg = f'✓ Dispositivo {mac} eliminado'
         except Exception as e:
-            self.bt_status_msg = f'Error: {e}'
+            errors.append(f'bluetoothctl: {e}')
+        # 2) Delete link-key directory so stale MITM keys can't block re-pairing
+        try:
+            for path in glob.glob(f'/var/lib/bluetooth/*/{mac}'):
+                shutil.rmtree(path, ignore_errors=True)
+                log_msg = f'Deleted {path}'
+        except Exception as e:
+            errors.append(f'rm keys: {e}')
+        # 3) Restart bluetoothd so it reloads without the stale key
+        try:
+            subprocess.run(['sudo', 'systemctl', 'restart', 'bluetooth'], timeout=10, capture_output=True)
+        except Exception as e:
+            errors.append(f'restart bt: {e}')
+        if errors:
+            self.bt_status_msg = 'Errores: ' + '; '.join(errors)
+        else:
+            self.bt_status_msg = f'✓ {mac} eliminado — ahora desempareja en Windows y vuelve a emparejar'
         self._bt_load_data()
 
     def bt_diagnose(self):
