@@ -64,6 +64,10 @@ cat > /etc/systemd/system/bluetooth.service.d/compat.conf << BTEOF
 ExecStart=
 ExecStart=${BLUETOOTHD} -C --noplugin=sap
 BTEOF
+# Reload and restart bluetooth so it picks up compat mode before bt-hid-server
+systemctl daemon-reload
+systemctl restart bluetooth.service
+sleep 2
 
 # Install BT HID server
 cp src/bt_hid_server.py /usr/local/bin/bt-hid-server
