@@ -204,7 +204,7 @@ def _diag(cmd):
         log.info(f'  [diag] {" ".join(cmd)}: {e}')
 
 
-def setup_adapter():
+def setup_adapter(outbound_connect_fn=None):
     """
     Configure BT adapter properties and publish the HID SDP record using
     BlueZ's ProfileManager1.RegisterProfile D-Bus API.
@@ -482,6 +482,17 @@ def setup_adapter():
                     log.info('[DBUS] Windows is connected at ACL level — NewConnection should fire soon')
                     log.info(f'[DBUS] ctrl_queue size={ctrl_profile._queue.qsize() if ctrl_profile._queue else "no queue"}')
                     log.info(f'[DBUS] intr_queue size={intr_profile._queue.qsize() if intr_profile._queue else "no queue"}')
+                    # Extract MAC from D-Bus path: /org/bluez/hci0/dev_04_7F_0E_02_33_03
+                    if outbound_connect_fn and sender:
+                        try:
+                            mac = str(sender).split('/')[-1].replace('dev_', '').replace('_', ':')
+                            if len(mac) == 17:  # looks like a valid MAC
+                                log.info(f'[DBUS] Scheduling outbound reconnect attempt to {mac} in 4s')
+                                t = threading.Timer(4.0, outbound_connect_fn, args=[mac])
+                                t.daemon = True
+                                t.start()
+                        except Exception as e:
+                            log.warning(f'[DBUS] Failed to schedule outbound connect: {e}')
                 else:
                     log.info('[DBUS] Windows DISCONNECTED — if NewConnection was never called, BlueZ is not routing to our profiles')
 
@@ -592,10 +603,49 @@ class BTKeyboardServer:
 
     # ── L2CAP connection management ───────────────────────────────────────────
 
+    def _try_outbound_connect(self, mac):
+        """
+        Called ~4s after Windows connects at ACL level if NewConnection never fired.
+        The Pi proactively opens L2CAP connections to Windows' HID PSMs.
+        In Bluetooth HID, either side can initiate. Windows often waits for the
+        device to reconnect rather than opening channels itself.
+        """
+        # Don't bother if inbound connections already arrived
+        if not self._ctrl_queue.empty() or self._intr is not None:
+            log.info(f'[Reconnect] Inbound HID channels already present — skipping outbound to {mac}')
+            return
+        log.info(f'[Reconnect] No inbound HID channels after 4s — connecting outbound to {mac}')
+        ctrl = None
+        try:
+            ctrl = socket.socket(socket.AF_BLUETOOTH, socket.SOCK_SEQPACKET, socket.BTPROTO_L2CAP)
+            ctrl.settimeout(10)
+            ctrl.connect((mac, CTRL_PSM))
+            ctrl.settimeout(None)
+            log.info(f'[Reconnect] Outbound ctrl connected fd={ctrl.fileno()} to {mac}:{CTRL_PSM:#x}')
+        except Exception as e:
+            log.error(f'[Reconnect] Outbound ctrl connect to {mac}:{CTRL_PSM:#x} failed: {e}')
+            if ctrl:
+                try: ctrl.close()
+                except: pass
+            return
+        time.sleep(0.3)
+        try:
+            intr = socket.socket(socket.AF_BLUETOOTH, socket.SOCK_SEQPACKET, socket.BTPROTO_L2CAP)
+            intr.settimeout(10)
+            intr.connect((mac, INTR_PSM))
+            intr.settimeout(None)
+            log.info(f'[Reconnect] Outbound intr connected fd={intr.fileno()} to {mac}:{INTR_PSM:#x} — keyboard ready!')
+            self._ctrl_queue.put(ctrl)
+            self._intr_queue.put(intr)
+        except Exception as e:
+            log.error(f'[Reconnect] Outbound intr connect to {mac}:{INTR_PSM:#x} failed: {e}')
+            try: ctrl.close()
+            except: pass
+
     def _accept_connection(self):
         """
-        Wait for BlueZ to deliver HID ctrl and intr sockets via D-Bus NewConnection.
-        BlueZ owns the L2CAP PSM listeners; we receive ready sockets via queues.
+        Wait for BlueZ to deliver HID ctrl and intr sockets via D-Bus NewConnection,
+        OR for outbound sockets placed in queues by _try_outbound_connect.
         """
         log.info('Waiting for BlueZ to deliver HID ctrl (PSM 0x11) from Windows...')
         ctrl = self._ctrl_queue.get()   # blocks until Windows connects on PSM 17
@@ -695,7 +745,9 @@ class BTKeyboardServer:
             pass
 
     def run(self):
-        bt_mgr, bt_loop, bt_ctrl_profile, bt_intr_profile = setup_adapter()
+        bt_mgr, bt_loop, bt_ctrl_profile, bt_intr_profile = setup_adapter(
+            outbound_connect_fn=self._try_outbound_connect,
+        )
         # Wire the queues so D-Bus NewConnection puts sockets where _accept_connection waits
         if bt_ctrl_profile is not None:
             bt_ctrl_profile._queue = self._ctrl_queue
