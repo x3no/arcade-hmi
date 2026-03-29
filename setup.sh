@@ -62,7 +62,7 @@ BLUETOOTHD=$(command -v bluetoothd 2>/dev/null || echo /usr/lib/bluetooth/blueto
 cat > /etc/systemd/system/bluetooth.service.d/compat.conf << BTEOF
 [Service]
 ExecStart=
-ExecStart=${BLUETOOTHD} -C --noplugin=sap
+ExecStart=${BLUETOOTHD} -C --noplugin=sap,input
 BTEOF
 # Reload and restart bluetooth so it picks up compat mode before bt-hid-server
 systemctl daemon-reload
