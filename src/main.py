@@ -389,6 +389,8 @@ class ArcadeControlApp:
         self.bt_refresh_btn   = None
         self.bt_close_btn     = None
         self.bt_diagnose_btn  = None
+        self.bt_connected = False  # live BT connection indicator
+        self._start_bt_status_poller()
         self.current_tab  = 'sistema'
         self.current_slot = 0  # 0 = general, 1-9 = save slots
 
@@ -823,6 +825,38 @@ class ArcadeControlApp:
         pygame.time.wait(2000)
 
     # ── Bluetooth pairing ─────────────────────────────────────────────────────
+
+    def _start_bt_status_poller(self):
+        """Background thread: check BT connection every 5 s."""
+        import subprocess, threading
+        def _poll():
+            while True:
+                try:
+                    out = subprocess.check_output(
+                        ['bluetoothctl', 'paired-devices'],
+                        timeout=5, stderr=subprocess.DEVNULL, text=True,
+                    )
+                    connected = False
+                    for line in out.strip().splitlines():
+                        parts = line.split(' ', 2)
+                        if len(parts) >= 2 and parts[0] == 'Device':
+                            mac = parts[1]
+                            try:
+                                info = subprocess.check_output(
+                                    ['bluetoothctl', 'info', mac],
+                                    timeout=4, stderr=subprocess.DEVNULL, text=True,
+                                )
+                                if 'Connected: yes' in info:
+                                    connected = True
+                                    break
+                            except Exception:
+                                pass
+                    self.bt_connected = connected
+                except Exception:
+                    pass
+                import time as _t; _t.sleep(5)
+        t = threading.Thread(target=_poll, daemon=True)
+        t.start()
 
     def _draw_bt_status(self, msg, error=False):
         pass  # kept for compat; full screen replaced by open_bt_screen
@@ -1351,8 +1385,16 @@ class ArcadeControlApp:
         # Clock — bottom center, monospace, gray
         datetime_str = datetime.now(ZoneInfo('Europe/Madrid')).strftime('%d-%m-%Y  %H:%M:%S')
         time_surf = self.font_mono.render(datetime_str, True, C_GRAY)
-        self.screen.blit(time_surf, time_surf.get_rect(
-            centerx=self.width // 2, centery=self.height - 120))
+        clock_rect = time_surf.get_rect(centerx=self.width // 2, centery=self.height - 120)
+        self.screen.blit(time_surf, clock_rect)
+
+        # BT indicator — right of clock
+        bt_color = (0, 210, 100) if self.bt_connected else (120, 120, 120)
+        bt_label = self.font_mono.render('BT', True, bt_color)
+        dot_x = clock_rect.right + 18
+        dot_y = clock_rect.centery
+        pygame.draw.circle(self.screen, bt_color, (dot_x, dot_y), 7)
+        self.screen.blit(bt_label, bt_label.get_rect(midleft=(dot_x + 12, dot_y)))
         
     def draw_main_screen(self):
         """Draw main control interface"""
