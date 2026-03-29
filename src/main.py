@@ -43,10 +43,13 @@ C_BTN    = (55,  55,  55)   # Action button background
 class SimpleButton:
     """Simple square button: black fill, white 3px border, white text."""
 
-    def __init__(self, rect, text, color=None, action=None, icon=None):
+    def __init__(self, rect, text, color=None, action=None, icon=None, hold_action=None):
         self.rect = pygame.Rect(rect)
         self.text = text
         self.action = action
+        self.hold_action = hold_action  # called repeatedly after 3s hold
+        self._press_time = 0            # set when is_pressed goes True
+        self._hold_fired = False        # True once repeat has started
         self.is_pressed = False
         self.icon = icon
 
@@ -219,6 +222,8 @@ class ScrollMenu:
             for btn in self.buttons:
                 if self._screen_rect(btn).collidepoint(event.pos):
                     btn.is_pressed   = True
+                    btn._press_time  = pygame.time.get_ticks()
+                    btn._hold_fired  = False
                     self.pressed_btn = btn
                     break
             return True
@@ -264,7 +269,7 @@ class ScrollMenu:
                 self.scroll_x = self.max_scroll
             if not self.is_scroll and self.pressed_btn:
                 self.pressed_btn.is_pressed = False
-                if self.pressed_btn.action:
+                if self.pressed_btn.action and not self.pressed_btn._hold_fired:
                     self.pressed_btn.action()
                 self.pressed_btn = None
             elif self.pressed_btn:
@@ -516,8 +521,8 @@ class ArcadeControlApp:
                 SimpleButton((0,0,0,0), "BLUETOOTH",    action=self.open_bt_screen,    icon='\ue1a8'),  # bluetooth
             ]),
             'sonido':   make_scroll(CONT_Y, h_norm, [
-                SimpleButton((0,0,0,0), "VOL +", action=self.volume_up,   icon='\ue050'),  # volume_up
-                SimpleButton((0,0,0,0), "VOL -", action=self.volume_down, icon='\ue04d'),  # volume_down
+                SimpleButton((0,0,0,0), "VOL +", action=self.volume_up,   icon='\ue050', hold_action=self.volume_up),
+                SimpleButton((0,0,0,0), "VOL -", action=self.volume_down, icon='\ue04d', hold_action=self.volume_down),
                 SimpleButton((0,0,0,0), "MUTE",  action=self.mute,        icon='\ue04f'),  # volume_off
             ]),
             'monedero': make_scroll(CONT_Y, h_norm, [
@@ -1616,8 +1621,23 @@ class ArcadeControlApp:
                         
     def run(self):
         """Main application loop"""
+        _hold_last_t = 0   # last time a hold_action was fired
+        HOLD_DELAY   = 3000  # ms before repeat starts
+        HOLD_REPEAT  = 300   # ms between repeat fires
         while self.running:
             self.handle_events()
+
+            # Hold-to-repeat for buttons with hold_action
+            now = pygame.time.get_ticks()
+            if not self.bt_screen and not self.locked and not self.confirmation_dialog:
+                menu = self._active_scroll_menu()
+                btn  = menu.pressed_btn if menu else None
+                if btn and btn.hold_action and btn.is_pressed:
+                    elapsed = now - btn._press_time
+                    if elapsed >= HOLD_DELAY and now - _hold_last_t >= HOLD_REPEAT:
+                        btn._hold_fired = True
+                        btn.hold_action()
+                        _hold_last_t = now
 
             if not self.locked and not self.confirmation_dialog and not self.debug_screen and not self.bt_screen:
                 self._active_scroll_menu().update()
