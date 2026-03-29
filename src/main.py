@@ -642,24 +642,35 @@ class ArcadeControlApp:
     ]
 
     def save_state(self):
-        """Save MAME state: Shift+F7, then slot digit"""
+        """RetroArch: navigate to slot (F6/F7) then F2 = save state"""
         try:
+            slot = self.current_slot  # 1-9
             with USBHID(self.config['hid_device']) as hid:
-                hid.send_key(KeyCode.KEY_F7, Modifier.LEFT_SHIFT)
-                hid.send_key(self._SLOT_KEYS[self.current_slot - 1])
+                # Slot 0 in RetroArch is default; slots 1-9 → press F7 N times
+                # First reset to slot 0 via F6 * 9, then advance to desired slot
+                for _ in range(9):
+                    hid.send_key(KeyCode.KEY_F6)
+                for _ in range(slot):
+                    hid.send_key(KeyCode.KEY_F7)
+                hid.send_key(KeyCode.KEY_F2)
         except Exception as e:
             print(f"Error saving state slot {self.current_slot}: {e}")
 
     def load_state(self):
-        """Load MAME state: F7, then slot digit"""
+        """RetroArch: navigate to slot (F6/F7) then F4 = load state"""
         try:
+            slot = self.current_slot  # 1-9
             with USBHID(self.config['hid_device']) as hid:
-                hid.send_key(KeyCode.KEY_F7)
-                hid.send_key(self._SLOT_KEYS[self.current_slot - 1])
+                for _ in range(9):
+                    hid.send_key(KeyCode.KEY_F6)
+                for _ in range(slot):
+                    hid.send_key(KeyCode.KEY_F7)
+                hid.send_key(KeyCode.KEY_F4)
         except Exception as e:
             print(f"Error loading state slot {self.current_slot}: {e}")
 
     def pause_game(self):
+        """RetroArch: P = pause toggle"""
         try:
             with USBHID(self.config['hid_device']) as hid:
                 hid.send_key(KeyCode.KEY_P)
@@ -667,41 +678,47 @@ class ArcadeControlApp:
             print(f"Error sending pause: {e}")
 
     def game_info(self):
+        """RetroArch: F1 = menu (no dedicated info key)"""
         try:
             with USBHID(self.config['hid_device']) as hid:
-                hid.send_key(KeyCode.KEY_F2)
+                hid.send_key(KeyCode.KEY_F1)
         except Exception as e:
             print(f"Error sending info: {e}")
 
     def fast_forward(self):
+        """RetroArch: Space = fast-forward toggle"""
         try:
             with USBHID(self.config['hid_device']) as hid:
-                hid.send_key(KeyCode.KEY_INSERT)
+                hid.send_key(KeyCode.KEY_SPACE)
         except Exception as e:
             print(f"Error sending fast forward: {e}")
 
     def screenshot(self):
+        """RetroArch: F8 = screenshot"""
         try:
             with USBHID(self.config['hid_device']) as hid:
-                hid.send_key(KeyCode.KEY_F12)
+                hid.send_key(KeyCode.KEY_F8)
         except Exception as e:
             print(f"Error sending screenshot: {e}")
 
     def mame_menu(self):
+        """RetroArch: F1 = menu toggle"""
         try:
             with USBHID(self.config['hid_device']) as hid:
-                hid.send_key(KeyCode.KEY_TAB)
+                hid.send_key(KeyCode.KEY_F1)
         except Exception as e:
             print(f"Error sending menu: {e}")
 
     def restart_game(self):
+        """RetroArch: H = reset content"""
         try:
             with USBHID(self.config['hid_device']) as hid:
-                hid.send_key(KeyCode.KEY_F3)
+                hid.send_key(KeyCode.KEY_H)
         except Exception as e:
             print(f"Error sending restart: {e}")
 
     def exit_game(self):
+        """RetroArch: ESC = quit"""
         try:
             with USBHID(self.config['hid_device']) as hid:
                 hid.send_key(KeyCode.KEY_ESC)
