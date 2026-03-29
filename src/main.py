@@ -8,6 +8,11 @@ import os
 import sys
 import time
 import platform
+from datetime import datetime
+try:
+    from zoneinfo import ZoneInfo
+except ImportError:
+    from backports.zoneinfo import ZoneInfo
 import pygame
 from pygame.locals import *
 
@@ -865,7 +870,7 @@ class ArcadeControlApp:
         self._active_scroll_menu().draw(self.screen, self.font_action, self.font_icon_action)
 
         # Clock — bottom center, monospace, gray
-        datetime_str = time.strftime('%d-%m-%Y  %H:%M:%S')
+        datetime_str = datetime.now(ZoneInfo('Europe/Madrid')).strftime('%d-%m-%Y  %H:%M:%S')
         time_surf = self.font_mono.render(datetime_str, True, C_GRAY)
         self.screen.blit(time_surf, time_surf.get_rect(
             centerx=self.width // 2, centery=self.height - 120))
