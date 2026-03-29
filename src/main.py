@@ -384,9 +384,10 @@ class ArcadeControlApp:
         self.bt_status_msg = ''
         self.bt_logs = []
         self.bt_remove_buttons = []
-        self.bt_activate_btn = None
-        self.bt_refresh_btn  = None
-        self.bt_close_btn    = None
+        self.bt_activate_btn  = None
+        self.bt_refresh_btn   = None
+        self.bt_close_btn     = None
+        self.bt_diagnose_btn  = None
         self.current_tab  = 'sistema'
         self.current_slot = 0  # 0 = general, 1-9 = save slots
 
@@ -868,34 +869,46 @@ class ArcadeControlApp:
         self._bt_fetch_logs()
         self._bt_build_buttons()
 
-    def _bt_fetch_logs(self, n=40):
+    def _bt_fetch_logs(self, n=35):
         import subprocess
+
+        def _journal(unit, count):
+            """Return cleaned (time, msg) lines from a systemd unit."""
+            try:
+                out = subprocess.check_output(
+                    ['journalctl', '-u', unit, f'-n{count}',
+                     '--no-pager', '--output=short'],
+                    timeout=5, stderr=subprocess.DEVNULL, text=True,
+                )
+                result = []
+                for line in out.splitlines():
+                    parts = line.split(None, 4)
+                    if len(parts) >= 5:
+                        t = parts[2]
+                        rest = parts[4]
+                        msg  = rest.split(': ', 1)[1] if ': ' in rest else rest
+                        result.append(f"{t}  [{unit}]  {msg.rstrip()}")
+                return result
+            except Exception as e:
+                return [f'Error {unit}: {e}']
+
+        # L2CAP listening sockets — shows whether PSM 17/19 are actually bound
+        l2cap_lines = []
         try:
-            out = subprocess.check_output(
-                ['journalctl', '-u', 'bt-hid-server', f'-n{n}',
-                 '--no-pager', '--output=short'],
-                timeout=5, stderr=subprocess.DEVNULL, text=True,
+            raw = subprocess.check_output(
+                ['bash', '-c', 'cat /proc/net/bluetooth/l2cap 2>/dev/null || echo "no l2cap file"'],
+                timeout=3, text=True, stderr=subprocess.DEVNULL,
             )
-            lines = [ln.rstrip() for ln in out.splitlines() if ln.strip()]
-            cleaned = []
-            for line in lines:
-                # "Mar 29 12:34:56 host bt-hid-server[pid]: actual message"
-                #  [0]  [1] [2]    [3]  [4=rest including process+msg]
-                parts = line.split(None, 4)
-                if len(parts) >= 5:
-                    time_s = parts[2]
-                    rest   = parts[4]  # "bt-hid-server[1234]: actual message"
-                    # Strip "processname[pid]: " prefix to show only the message
-                    if ': ' in rest:
-                        msg = rest.split(': ', 1)[1]
-                    else:
-                        msg = rest
-                    cleaned.append(f"{time_s}  {msg}")
-                else:
-                    cleaned.append(line)
-            self.bt_logs = cleaned[-n:]
-        except Exception as e:
-            self.bt_logs = [f'Error leyendo logs: {e}']
+            for ln in raw.strip().splitlines():
+                l2cap_lines.append(f'         [l2cap]  {ln.strip()}')
+        except Exception:
+            pass
+
+        # Combine: our service (newest 20) + bluetoothd (newest 10) + l2cap table
+        lines_hid = _journal('bt-hid-server', 20)
+        lines_btd = _journal('bluetooth',     10)
+        combined  = lines_hid + ['---'] + lines_btd + [' --- /proc/net/bluetooth/l2cap ---'] + l2cap_lines
+        self.bt_logs = combined[-n:]
 
     def _bt_build_buttons(self):
         devices = self.bt_data.get('devices', [])
@@ -916,25 +929,29 @@ class ArcadeControlApp:
             )
             self.bt_remove_buttons.append(btn)
 
-        # Bottom row: activate + refresh + close
+        # Bottom row: activate + refresh + diagnose + close
         btn_h = 90
         btn_y = self.height - btn_h - 25
-        btn_w = 360
-        gap   = 24
-        n     = 3
+        btn_w = 260
+        gap   = 18
+        n     = 4
         total_w = n * btn_w + (n - 1) * gap
         x = (self.width - total_w) // 2
 
         self.bt_activate_btn = SimpleButton(
-            (x, btn_y, btn_w, btn_h), 'ACTIVAR EMPAREJAMIENTO',
+            (x, btn_y, btn_w, btn_h), 'ACTIVAR EMPAR.',
             action=self.bt_activate_pairing, icon='\ue1a8',
         )
         self.bt_refresh_btn = SimpleButton(
             (x + btn_w + gap, btn_y, btn_w, btn_h), 'ACTUALIZAR',
             action=self.bt_refresh, icon='\ue5d5',
         )
+        self.bt_diagnose_btn = SimpleButton(
+            (x + 2 * (btn_w + gap), btn_y, btn_w, btn_h), 'DIAGNÓSTICO',
+            action=self.bt_diagnose, icon='\ue868',
+        )
         self.bt_close_btn = SimpleButton(
-            (x + 2 * (btn_w + gap), btn_y, btn_w, btn_h), 'CERRAR',
+            (x + 3 * (btn_w + gap), btn_y, btn_w, btn_h), 'CERRAR',
             action=self.close_bt_screen, icon='\ue5cd',
         )
 
@@ -998,6 +1015,77 @@ class ArcadeControlApp:
         except Exception as e:
             self.bt_status_msg = f'Error: {e}'
         self._bt_load_data()
+
+    def bt_diagnose(self):
+        """Run btmon for 8 s + sdptool + l2cap sockets. User should try
+        connecting from Windows during those 8 seconds."""
+        import subprocess, tempfile, os, time as _time
+
+        self.bt_status_msg = 'Iniciando btmon — conecta desde Windows AHORA (8s)...'
+        self.draw_bt_screen()
+        pygame.event.pump()
+
+        # Start btmon in background writing to a temp file
+        tmpf = '/tmp/arcade-btmon.log'
+        try:
+            proc = subprocess.Popen(
+                ['btmon', '--no-pager'],
+                stdout=open(tmpf, 'w'), stderr=subprocess.STDOUT,
+            )
+        except Exception as e:
+            self.bt_status_msg = f'btmon no disponible: {e}'
+            self._bt_fetch_logs()
+            return
+
+        # Count down 8 seconds with live screen update
+        for remaining in range(8, 0, -1):
+            self.bt_status_msg = f'btmon capturando... conecta desde Windows ({remaining}s restantes)'
+            self.draw_bt_screen()
+            pygame.event.pump()
+            pygame.time.wait(1000)
+
+        proc.terminate()
+        proc.wait(timeout=2)
+
+        # Parse btmon output — extract lines with L2CAP, HID, PSM, SDP keywords
+        diag_lines = ['=== btmon ==='] 
+        keywords = ('l2cap', 'psm', 'sdp', 'hid', 'conn req', 'conn rsp',
+                    'security', 'auth', 'reject', 'refused', 'error')
+        try:
+            with open(tmpf) as f:
+                for ln in f:
+                    lnl = ln.lower()
+                    if any(k in lnl for k in keywords):
+                        diag_lines.append(ln.rstrip()[:160])
+        except Exception as e:
+            diag_lines.append(f'Error leyendo btmon: {e}')
+
+        if len(diag_lines) == 1:
+            diag_lines.append('(sin eventos L2CAP/SDP capturados)')
+
+        # sdptool browse own MAC
+        diag_lines.append('=== sdptool browse local ===')
+        try:
+            import subprocess as sp
+            r = sp.run(['sdptool', 'browse', 'local'],
+                       capture_output=True, text=True, timeout=5)
+            for ln in (r.stdout + r.stderr).splitlines():
+                if any(k in ln.lower() for k in ('psm', 'hid', 'uuid', 'service name')):
+                    diag_lines.append(ln.rstrip()[:160])
+        except Exception as e:
+            diag_lines.append(f'sdptool: {e}')
+
+        # L2CAP socket table
+        diag_lines.append('=== /proc/net/bluetooth/l2cap ===')
+        try:
+            with open('/proc/net/bluetooth/l2cap') as f:
+                for ln in f:
+                    diag_lines.append(ln.rstrip()[:160])
+        except Exception as e:
+            diag_lines.append(f'l2cap proc: {e}')
+
+        self.bt_logs = diag_lines
+        self.bt_status_msg = f'Diagnóst. completo — {len(diag_lines)} líneas capturadas'
 
     def bt_pair(self):  # backwards compat
         self.open_bt_screen()
@@ -1094,7 +1182,8 @@ class ArcadeControlApp:
                 centerx=self.width // 2, bottom=self.height - 130))
 
         # ── Bottom buttons ───────────────────────────────────────────────
-        for btn in (self.bt_activate_btn, self.bt_refresh_btn, self.bt_close_btn):
+        for btn in (self.bt_activate_btn, self.bt_refresh_btn,
+                    self.bt_diagnose_btn, self.bt_close_btn):
             if btn:
                 btn.draw(self.screen, self.font_action, self.font_icon_sm)
 
@@ -1365,7 +1454,8 @@ class ArcadeControlApp:
                     if event.type in (MOUSEBUTTONDOWN, MOUSEBUTTONUP):
                         for btn in self.bt_remove_buttons:
                             btn.handle_event(event)
-                        for btn in (self.bt_activate_btn, self.bt_refresh_btn, self.bt_close_btn):
+                        for btn in (self.bt_activate_btn, self.bt_refresh_btn,
+                                    self.bt_diagnose_btn, self.bt_close_btn):
                             if btn:
                                 btn.handle_event(event)
                     continue
