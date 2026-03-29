@@ -910,6 +910,7 @@ class ArcadeControlApp:
         lines_btd = _journal('bluetooth',     10)
         combined  = lines_hid + ['---'] + lines_btd + [' --- /proc/net/bluetooth/l2cap ---'] + l2cap_lines
         self.bt_logs = combined[-n:]
+        self.bt_log_scroll = 0  # reset scroll so newest lines are visible
         # Always save to /tmp so user can scp it
         self._bt_save_log_file('refresh')
     def _bt_build_buttons(self):
@@ -1066,15 +1067,16 @@ class ArcadeControlApp:
         proc.terminate()
         proc.wait(timeout=2)
 
-        # Parse btmon output — extract lines with L2CAP, HID, PSM, SDP keywords
-        diag_lines = ['=== btmon ==='] 
+        # Parse btmon output — save ALL lines to file, show filtered on screen
+        diag_lines = ['=== btmon ===']  
+        btmon_all  = []
         keywords = ('l2cap', 'psm', 'sdp', 'hid', 'conn req', 'conn rsp',
-                    'security', 'auth', 'reject', 'refused', 'error')
+                    'security', 'auth', 'reject', 'refused', 'error', 'mgmt')
         try:
             with open(tmpf) as f:
                 for ln in f:
-                    lnl = ln.lower()
-                    if any(k in lnl for k in keywords):
+                    btmon_all.append(ln.rstrip())
+                    if any(k in ln.lower() for k in keywords):
                         diag_lines.append(ln.rstrip()[:160])
         except Exception as e:
             diag_lines.append(f'Error leyendo btmon: {e}')
@@ -1127,12 +1129,15 @@ class ArcadeControlApp:
             diag_lines.append(f'l2cap proc: {e}')
 
         self.bt_logs = diag_lines
-        # Save full untruncated output to file
-        self._bt_save_log_file('diag', lines=diag_lines)
-        self.bt_status_msg = f'Diagnóst. completo — archivo: /tmp/arcade-bt-diag-*.log'
+        self.bt_log_scroll = 0  # show from top so user sees === btmon === header
+        # Save full untruncated output (all btmon lines + sections) to file
+        full_output = btmon_all + diag_lines
+        saved_path  = self._bt_save_log_file('diag', lines=full_output)
+        self.bt_status_msg = f'Listo — archivo: {saved_path or "/tmp/arcade-bt-diag-*.log"}'
+        self.draw_bt_screen()
 
     def _bt_save_log_file(self, tag='', lines=None):
-        """Write bt_logs to a timestamped file in /tmp."""
+        """Write bt_logs to a timestamped file in /tmp. Returns the path on success."""
         import datetime
         ts   = datetime.datetime.now().strftime('%Y%m%d-%H%M%S')
         path = f'/tmp/arcade-bt-{tag}-{ts}.log'
@@ -1146,8 +1151,10 @@ class ArcadeControlApp:
             for p in old:
                 try: _os.remove(p)
                 except: pass
-        except Exception:
-            pass
+            return path
+        except Exception as e:
+            self.bt_status_msg = f'Error guardando log: {e}'
+            return None
 
     def bt_pair(self):  # backwards compat
         self.open_bt_screen()
