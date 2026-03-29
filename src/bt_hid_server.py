@@ -44,6 +44,7 @@ logging.basicConfig(
 log = logging.getLogger('bt-hid')
 
 UNIX_SOCK_PATH = '/var/run/arcade-hid.sock'
+BT_STATUS_FILE = '/var/run/arcade-hid-status'  # 'connected' or 'disconnected'
 CTRL_PSM       = 0x11   # L2CAP PSM 17 — HID Control
 INTR_PSM       = 0x13   # L2CAP PSM 19 — HID Interrupt (key reports sent here)
 BDADDR_ANY     = '00:00:00:00:00:00'
@@ -664,6 +665,13 @@ class BTKeyboardServer:
             except Exception:
                 pass
             raise OSError('HID intr channel timeout')
+    def _write_status(self, connected: bool):
+        try:
+            with open(BT_STATUS_FILE, 'w') as f:
+                f.write('connected' if connected else 'disconnected')
+        except Exception:
+            pass
+
     def _connection_loop(self):
         """Background thread: accept connections, update active sockets."""
         while True:
@@ -673,7 +681,8 @@ class BTKeyboardServer:
                 with self._lock:
                     self._ctrl = ctrl
                     self._intr = intr
-                # Wait for intr socket to close (ctrl handled in its own thread)
+                self._write_status(True)
+                log.info('[Status] HID connected — wrote status file')
                 while True:
                     try:
                         data = intr.recv(1, socket.MSG_DONTWAIT)
@@ -699,6 +708,7 @@ class BTKeyboardServer:
                 with self._lock:
                     self._ctrl = None
                     self._intr = None
+                self._write_status(False)
 
     # ── Key sending ──────────────────────────────────────────────────────────
 

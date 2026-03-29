@@ -827,34 +827,17 @@ class ArcadeControlApp:
     # ── Bluetooth pairing ─────────────────────────────────────────────────────
 
     def _start_bt_status_poller(self):
-        """Background thread: check BT connection every 5 s."""
-        import subprocess, threading
+        """Background thread: check BT connection every 3 s via status file."""
+        import threading
         def _poll():
+            import time as _t
             while True:
                 try:
-                    out = subprocess.check_output(
-                        ['bluetoothctl', 'paired-devices'],
-                        timeout=5, stderr=subprocess.DEVNULL, text=True,
-                    )
-                    connected = False
-                    for line in out.strip().splitlines():
-                        parts = line.split(' ', 2)
-                        if len(parts) >= 2 and parts[0] == 'Device':
-                            mac = parts[1]
-                            try:
-                                info = subprocess.check_output(
-                                    ['bluetoothctl', 'info', mac],
-                                    timeout=4, stderr=subprocess.DEVNULL, text=True,
-                                )
-                                if 'Connected: yes' in info:
-                                    connected = True
-                                    break
-                            except Exception:
-                                pass
-                    self.bt_connected = connected
+                    with open('/var/run/arcade-hid-status') as f:
+                        self.bt_connected = f.read().strip() == 'connected'
                 except Exception:
-                    pass
-                import time as _t; _t.sleep(5)
+                    self.bt_connected = False
+                _t.sleep(3)
         t = threading.Thread(target=_poll, daemon=True)
         t.start()
 
