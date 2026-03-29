@@ -382,6 +382,7 @@ class ArcadeControlApp:
         self.bt_screen = False
         self.bt_data = {'devices': [], 'server_active': False}
         self.bt_status_msg = ''
+        self.bt_logs = []
         self.bt_remove_buttons = []
         self.bt_activate_btn = None
         self.bt_refresh_btn  = None
@@ -864,7 +865,29 @@ class ArcadeControlApp:
             pass
 
         self.bt_data = {'devices': devices, 'server_active': server_active}
+        self._bt_fetch_logs()
         self._bt_build_buttons()
+
+    def _bt_fetch_logs(self, n=18):
+        import subprocess
+        try:
+            out = subprocess.check_output(
+                ['journalctl', '-u', 'bt-hid-server', f'-n{n}',
+                 '--no-pager', '--output=short'],
+                timeout=5, stderr=subprocess.DEVNULL, text=True,
+            )
+            lines = [ln.rstrip() for ln in out.splitlines() if ln.strip()]
+            cleaned = []
+            for line in lines:
+                # "Mar 29 12:34:56 host bt-hid-server[pid]: message"
+                parts = line.split(None, 4)
+                if len(parts) >= 5:
+                    cleaned.append(f"{parts[2]}  {parts[4]}")
+                else:
+                    cleaned.append(line)
+            self.bt_logs = cleaned[-n:]
+        except Exception as e:
+            self.bt_logs = [f'Error leyendo logs: {e}']
 
     def _bt_build_buttons(self):
         devices = self.bt_data.get('devices', [])
@@ -1030,6 +1053,24 @@ class ArcadeControlApp:
                 # Remove button
                 if i < len(self.bt_remove_buttons):
                     self.bt_remove_buttons[i].draw(self.screen, self.font_action, self.font_icon_sm)
+
+        # ── Log panel ────────────────────────────────────────────────────
+        LOG_Y = max(510, ROW_Y_START + max(1, len(devices)) * ROW_H + 20)
+        pygame.draw.line(self.screen, C_GRAY, (20, LOG_Y), (self.width - 20, LOG_Y), 1)
+        hdr_s = self.font_slot.render('LOGS  ·  bt-hid-server', True, C_GRAY)
+        self.screen.blit(hdr_s, (30, LOG_Y + 8))
+        line_h = 28
+        y_log  = LOG_Y + 44
+        for ln in self.bt_logs:
+            if y_log + line_h > self.height - 140:
+                break
+            lc = (C_ORANGE
+                  if any(k in ln.lower() for k in ('error', 'fail', 'traceback', 'exception'))
+                  else (255, 200, 80)
+                  if any(k in ln.lower() for k in ('warning', 'warn'))
+                  else C_GRAY)
+            self.screen.blit(self.font_slot.render(ln[:120], True, lc), (30, y_log))
+            y_log += line_h
 
         # ── Status message ───────────────────────────────────────────────
         if self.bt_status_msg:
