@@ -434,27 +434,43 @@ def setup_adapter():
         loop = GLib.MainLoop()
         threading.Thread(target=loop.run, daemon=True).start()
 
-        # Subscribe to BlueZ D-Bus signals to trace Windows connection attempts.
-        # These fire even if the L2CAP connection never reaches our raw sockets.
+        # ── D-Bus signal monitoring ──────────────────────────────────────────
+        # Log EVERYTHING — no filtering — so we can see exactly what BlueZ
+        # does (or does not do) when Windows tries to connect.
+
+        def _trust_device(path):
+            """Auto-trust a device so BlueZ doesn't silently reject it."""
+            try:
+                dev_obj  = bus.get_object('org.bluez', path)
+                dev_props = dbus.Interface(dev_obj, 'org.freedesktop.DBus.Properties')
+                dev_props.Set('org.bluez.Device1', 'Trusted', dbus.Boolean(True))
+                log.info(f'[TRUST] Trusted device at {path}')
+            except Exception as e:
+                log.warning(f'[TRUST] Could not trust {path}: {e}')
+
         def _on_ifaces_added(path, ifaces):
+            log.info(f'[DBUS] InterfacesAdded path={path} ifaces={list(ifaces.keys())}')
             if 'org.bluez.Device1' in ifaces:
-                props = ifaces['org.bluez.Device1']
-                addr  = props.get('Address', '?')
-                name  = props.get('Name', '?')
-                log.info(f'[BT-EVENT] Device appeared: {addr} name={name} path={path}')
+                props = dict(ifaces['org.bluez.Device1'])
+                log.info(f'[DBUS] Device1 ALL props: {props}')
+                # Auto-trust so BlueZ doesn't refuse NewConnection silently
+                threading.Thread(target=_trust_device, args=(path,), daemon=True).start()
+
+        def _on_ifaces_removed(path, ifaces):
+            log.info(f'[DBUS] InterfacesRemoved path={path} ifaces={ifaces}')
 
         def _on_props_changed(iface, changed, invalidated, sender=None):
-            if iface == 'org.bluez.Device1':
-                interesting = {'Connected', 'Paired', 'Trusted', 'Blocked',
-                               'ServicesResolved', 'LegacyPairing'}
-                filtered = {k: v for k, v in changed.items() if k in interesting}
-                if filtered:
-                    log.info(f'[BT-EVENT] Device1 props changed: {dict(filtered)}')
-            elif iface == 'org.bluez.Adapter1':
-                interesting = {'Discoverable', 'Pairable', 'Discovering'}
-                filtered = {k: v for k, v in changed.items() if k in interesting}
-                if filtered:
-                    log.info(f'[BT-EVENT] Adapter1 props changed: {dict(filtered)}')
+            # Log ALL prop changes on ALL interfaces without filtering
+            log.info(f'[DBUS] PropertiesChanged iface={iface} changed={dict(changed)} invalidated={list(invalidated)}')
+            if iface == 'org.bluez.Device1' and 'Connected' in changed:
+                connected = bool(changed['Connected'])
+                log.info(f'[DBUS] >>> Device Connected={connected} <<<')
+                if connected:
+                    log.info('[DBUS] Windows is connected at ACL level — NewConnection should fire soon')
+                    log.info(f'[DBUS] ctrl_queue size={ctrl_profile._queue.qsize() if ctrl_profile._queue else "no queue"}')
+                    log.info(f'[DBUS] intr_queue size={intr_profile._queue.qsize() if intr_profile._queue else "no queue"}')
+                else:
+                    log.info('[DBUS] Windows DISCONNECTED — if NewConnection was never called, BlueZ is not routing to our profiles')
 
         bus.add_signal_receiver(
             _on_ifaces_added,
@@ -462,12 +478,17 @@ def setup_adapter():
             signal_name='InterfacesAdded',
         )
         bus.add_signal_receiver(
+            _on_ifaces_removed,
+            dbus_interface='org.freedesktop.DBus.ObjectManager',
+            signal_name='InterfacesRemoved',
+        )
+        bus.add_signal_receiver(
             _on_props_changed,
             dbus_interface='org.freedesktop.DBus.Properties',
             signal_name='PropertiesChanged',
             path_keyword='sender',
         )
-        log.info('D-Bus BlueZ signal monitoring active')
+        log.info('D-Bus signal monitoring active (logging ALL events)')
 
         # Verify SDP record is actually visible by browsing our own MAC
         # ('sdptool browse local' is broken in BlueZ 5.x — use the real address)
