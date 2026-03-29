@@ -497,10 +497,11 @@ class ArcadeControlApp:
             'sistema':  make_scroll(CONT_Y, h_norm, [
                 SimpleButton((0,0,0,0), "ENCENDER PC",  action=self.power_on_confirm,  icon='\ue1a7'),  # power
                 SimpleButton((0,0,0,0), "APAGAR PC",    action=self.power_off_confirm, icon='\ue8ac'),  # power_off
-                SimpleButton((0,0,0,0), "PANTALLA OFF", action=self.screen_off,        icon='\ue8d9'),  # no_meeting_room -> screen_lock_power
+                SimpleButton((0,0,0,0), "PANTALLA OFF", action=self.screen_off,        icon='\ue8d9'),  # screen_lock_power
                 SimpleButton((0,0,0,0), "BLOQUEAR",     action=self.lock_screen,       icon='\ue897'),  # lock
                 SimpleButton((0,0,0,0), "DEBUG",        action=self.open_debug,        icon='\ue868'),  # bug_report
                 SimpleButton((0,0,0,0), "UPDATE",       action=self.update_confirm,    icon='\ue923'),  # system_update
+                SimpleButton((0,0,0,0), "BLUETOOTH",    action=self.bt_pair,           icon='\ue1a8'),  # bluetooth
             ]),
             'sonido':   make_scroll(CONT_Y, h_norm, [
                 SimpleButton((0,0,0,0), "VOL +", action=self.volume_up,   icon='\ue050'),  # volume_up
@@ -810,6 +811,61 @@ class ArcadeControlApp:
             self.screen.blit(l2, l2.get_rect(center=(self.width // 2, self.height // 2 + 40)))
         pygame.display.flip()
         pygame.time.wait(2000)
+
+    # ── Bluetooth pairing ─────────────────────────────────────────────────────
+
+    def _draw_bt_status(self, msg, error=False):
+        """Render a full-screen BT status message."""
+        self.screen.fill(C_BG)
+        color = C_ORANGE if error else C_WHITE
+        if self.font_icon_action:
+            ic = self.font_icon_action.render('\ue1a8', True, color)  # bluetooth
+            self.screen.blit(ic, ic.get_rect(center=(self.width // 2, self.height // 2 - 100)))
+        y = self.height // 2
+        for line in msg.split('\n'):
+            surf = self.font.render(line, True, color)
+            self.screen.blit(surf, surf.get_rect(center=(self.width // 2, y)))
+            y += surf.get_height() + 10
+        pygame.display.flip()
+
+    def bt_pair(self):
+        """
+        1. Copy latest bt_hid_server.py to /usr/local/bin/bt-hid-server
+        2. Restart the bt-hid-server systemd service
+        3. Show instructions for pairing from Windows
+        """
+        import subprocess
+        repo_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        src = os.path.join(repo_dir, 'src', 'bt_hid_server.py')
+
+        steps = [
+            (['sudo', 'cp', src, '/usr/local/bin/bt-hid-server'],
+             'Copiando servidor BT...'),
+            (['sudo', 'systemctl', 'restart', 'bt-hid-server'],
+             'Reiniciando servicio BT...'),
+        ]
+
+        for cmd, label in steps:
+            self._draw_bt_status(label)
+            # Pump events so the display doesn't freeze
+            pygame.event.pump()
+            try:
+                result = subprocess.run(cmd, timeout=15, capture_output=True)
+                if result.returncode != 0:
+                    err = result.stderr.decode('utf-8', errors='ignore').strip()
+                    self._draw_bt_status(f'Error:\n{err[:60] or " ".join(cmd)}', error=True)
+                    pygame.time.wait(3500)
+                    return
+            except Exception as e:
+                self._draw_bt_status(f'Error:\n{e}', error=True)
+                pygame.time.wait(3500)
+                return
+
+        self._draw_bt_status(
+            'Listo — empareja desde Windows\n'
+            'Bluetooth → Arcade HID Keyboard'
+        )
+        pygame.time.wait(4000)
     
     def draw_cyberpunk_bg(self):
         pass

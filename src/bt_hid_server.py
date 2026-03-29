@@ -51,10 +51,10 @@ BDADDR_ANY     = '00:00:00:00:00:00'
 DBUS_PROFILE_PATH = '/org/bluez/arcade_hid'
 HID_UUID          = '00001124-0000-1000-8000-00805f9b34fb'
 
-# Bluetooth HID report
+# Bluetooth HID report header byte
 HID_INPUT  = 0xA1
-REPORT_ID  = 0x01
-RELEASE    = bytes([HID_INPUT, REPORT_ID, 0, 0, 0, 0, 0, 0, 0, 0])
+REPORT_ID  = 0x01   # kept for any legacy references
+RELEASE    = bytes([HID_INPUT, REPORT_ID, 0, 0, 0, 0, 0, 0, 0, 0])  # legacy alias
 
 # HIDP control channel message types (upper nibble of first byte)
 HIDP_HANDSHAKE        = 0x00
@@ -66,20 +66,79 @@ HIDP_SET_PROTOCOL     = 0x70
 HIDP_DATA             = 0xA0
 HIDP_VIRTUAL_UNPLUG   = 0x05
 
-# HID report descriptor — standard keyboard with keycodes 0x00-0xFF
+# HID report ID assignments
+REPORT_ID_KEYBOARD  = 0x01
+REPORT_ID_CONSUMER  = 0x02
+
+# Consumer Control keycodes (Usage Page 0x0C) — same values as in usb_hid.py
+CONSUMER_MUTE       = 0x7F   # KeyCode.KEY_MUTE
+CONSUMER_VOL_UP     = 0x80   # KeyCode.KEY_VOLUME_UP  (note: non-standard mapping)
+CONSUMER_VOL_DOWN   = 0x81   # KeyCode.KEY_VOLUME_DOWN
+# Map internal keycodes → real HID Consumer usages (USB HID Usage Tables 1.3)
+_CONSUMER_USAGE = {
+    0x7F: 0x00E2,   # Mute
+    0x80: 0x00E9,   # Volume Increment
+    0x81: 0x00EA,   # Volume Decrement
+}
+_CONSUMER_KEYCODES = set(_CONSUMER_USAGE)
+
+# HID report descriptor:
+#   Report ID 1 — standard keyboard (modifier + reserved + 6 keys)
+#   Report ID 2 — Consumer Control (16-bit usage, one key at a time)
 _HID_DESC = bytes([
-    0x05, 0x01, 0x09, 0x06, 0xa1, 0x01,
-    0x05, 0x07, 0x19, 0xe0, 0x29, 0xe7,
-    0x15, 0x00, 0x25, 0x01, 0x75, 0x01,
-    0x95, 0x08, 0x81, 0x02, 0x95, 0x01,
-    0x75, 0x08, 0x81, 0x03, 0x95, 0x05,
-    0x75, 0x01, 0x05, 0x08, 0x19, 0x01,
-    0x29, 0x05, 0x91, 0x02, 0x95, 0x01,
-    0x75, 0x03, 0x91, 0x03, 0x95, 0x06,
-    0x75, 0x08, 0x15, 0x00, 0x26, 0xff,
-    0x00, 0x05, 0x07, 0x19, 0x00, 0x29,
-    0xff, 0x81, 0x00, 0xc0,
+    # --- Report ID 1: Keyboard ---
+    0x05, 0x01,        # Usage Page (Generic Desktop)
+    0x09, 0x06,        # Usage (Keyboard)
+    0xa1, 0x01,        # Collection (Application)
+    0x85, 0x01,        #   Report ID (1)
+    0x05, 0x07,        #   Usage Page (Key Codes)
+    0x19, 0xe0,        #   Usage Minimum (224)
+    0x29, 0xe7,        #   Usage Maximum (231)
+    0x15, 0x00,        #   Logical Minimum (0)
+    0x25, 0x01,        #   Logical Maximum (1)
+    0x75, 0x01,        #   Report Size (1)
+    0x95, 0x08,        #   Report Count (8) — modifier byte
+    0x81, 0x02,        #   Input (modifier keys)
+    0x95, 0x01,        #   Report Count (1)
+    0x75, 0x08,        #   Report Size (8)
+    0x81, 0x03,        #   Input (reserved)
+    0x95, 0x05,        #   Report Count (5)
+    0x75, 0x01,        #   Report Size (1)
+    0x05, 0x08,        #   Usage Page (LEDs)
+    0x19, 0x01,        #   Usage Minimum (1)
+    0x29, 0x05,        #   Usage Maximum (5)
+    0x91, 0x02,        #   Output (LED flags)
+    0x95, 0x01,        #   Report Count (1)
+    0x75, 0x03,        #   Report Size (3)
+    0x91, 0x03,        #   Output (LED padding)
+    0x95, 0x06,        #   Report Count (6)
+    0x75, 0x08,        #   Report Size (8)
+    0x15, 0x00,        #   Logical Minimum (0)
+    0x26, 0xff, 0x00,  #   Logical Maximum (255)
+    0x05, 0x07,        #   Usage Page (Key Codes)
+    0x19, 0x00,        #   Usage Minimum (0)
+    0x29, 0xff,        #   Usage Maximum (255)
+    0x81, 0x00,        #   Input (key array)
+    0xc0,              # End Collection
+
+    # --- Report ID 2: Consumer Control (media keys) ---
+    0x05, 0x0c,        # Usage Page (Consumer)
+    0x09, 0x01,        # Usage (Consumer Control)
+    0xa1, 0x01,        # Collection (Application)
+    0x85, 0x02,        #   Report ID (2)
+    0x15, 0x00,        #   Logical Minimum (0)
+    0x26, 0xff, 0x03,  #   Logical Maximum (1023)
+    0x19, 0x00,        #   Usage Minimum (0)
+    0x2a, 0xff, 0x03,  #   Usage Maximum (1023)
+    0x75, 0x10,        #   Report Size (16)
+    0x95, 0x01,        #   Report Count (1)
+    0x81, 0x00,        #   Input (Consumer key)
+    0xc0,              # End Collection
 ])
+
+# Release reports (one per report ID)
+RELEASE_KEYBOARD = bytes([HID_INPUT, REPORT_ID_KEYBOARD, 0, 0, 0, 0, 0, 0, 0, 0])
+RELEASE_CONSUMER = bytes([HID_INPUT, REPORT_ID_CONSUMER, 0x00, 0x00])
 
 # SDP record XML published via BlueZ D-Bus so Windows recognises a keyboard
 _SDP_RECORD = f"""<?xml version="1.0" encoding="UTF-8"?>
@@ -529,15 +588,27 @@ class BTKeyboardServer:
         with self._lock:
             intr = self._intr
         if intr is None:
+            log.debug('send_key: no host connected')
             return False
         try:
-            press = bytes([HID_INPUT, REPORT_ID, modifier, 0,
-                           key_code, 0, 0, 0, 0, 0])
+            if key_code in _CONSUMER_KEYCODES:
+                # Consumer Control report (ID=2): 16-bit usage little-endian
+                usage = _CONSUMER_USAGE[key_code]
+                press   = bytes([HID_INPUT, REPORT_ID_CONSUMER,
+                                 usage & 0xFF, (usage >> 8) & 0xFF])
+                release = RELEASE_CONSUMER
+                log.info(f'TX Consumer key={key_code:#04x} usage={usage:#06x}')
+            else:
+                # Standard keyboard report (ID=1)
+                press   = bytes([HID_INPUT, REPORT_ID_KEYBOARD,
+                                 modifier, 0, key_code, 0, 0, 0, 0, 0])
+                release = RELEASE_KEYBOARD
+                log.info(f'TX Keyboard modifier={modifier:#04x} key={key_code:#04x}')
             intr.send(press)
-            intr.send(RELEASE)
+            intr.send(release)
             return True
         except OSError as e:
-            log.warning(f"Send failed: {e}")
+            log.warning(f'send_key failed: {e}')
             with self._lock:
                 self._intr = None
                 self._ctrl = None
