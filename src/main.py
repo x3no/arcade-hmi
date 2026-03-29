@@ -868,7 +868,7 @@ class ArcadeControlApp:
         self._bt_fetch_logs()
         self._bt_build_buttons()
 
-    def _bt_fetch_logs(self, n=18):
+    def _bt_fetch_logs(self, n=30):
         import subprocess
         try:
             out = subprocess.check_output(
@@ -879,10 +879,18 @@ class ArcadeControlApp:
             lines = [ln.rstrip() for ln in out.splitlines() if ln.strip()]
             cleaned = []
             for line in lines:
-                # "Mar 29 12:34:56 host bt-hid-server[pid]: message"
+                # "Mar 29 12:34:56 host bt-hid-server[pid]: actual message"
+                #  [0]  [1] [2]    [3]  [4=rest including process+msg]
                 parts = line.split(None, 4)
                 if len(parts) >= 5:
-                    cleaned.append(f"{parts[2]}  {parts[4]}")
+                    time_s = parts[2]
+                    rest   = parts[4]  # "bt-hid-server[1234]: actual message"
+                    # Strip "processname[pid]: " prefix to show only the message
+                    if ': ' in rest:
+                        msg = rest.split(': ', 1)[1]
+                    else:
+                        msg = rest
+                    cleaned.append(f"{time_s}  {msg}")
                 else:
                     cleaned.append(line)
             self.bt_logs = cleaned[-n:]
@@ -1059,17 +1067,20 @@ class ArcadeControlApp:
         pygame.draw.line(self.screen, C_GRAY, (20, LOG_Y), (self.width - 20, LOG_Y), 1)
         hdr_s = self.font_slot.render('LOGS  ·  bt-hid-server', True, C_GRAY)
         self.screen.blit(hdr_s, (30, LOG_Y + 8))
-        line_h = 28
-        y_log  = LOG_Y + 44
+        line_h = 24
+        y_log  = LOG_Y + 40
+        font_log = self.font_slot  # size-30 font — fits ~140 chars at 1920px wide
         for ln in self.bt_logs:
             if y_log + line_h > self.height - 140:
                 break
             lc = (C_ORANGE
                   if any(k in ln.lower() for k in ('error', 'fail', 'traceback', 'exception'))
                   else (255, 200, 80)
-                  if any(k in ln.lower() for k in ('warning', 'warn'))
+                  if any(k in ln.lower() for k in ('warning', 'warn', 'bad', 'intercepting'))
+                  else (180, 255, 180)
+                  if any(k in ln.lower() for k in ('connected', 'ready', 'registered', 'keyboard ready', 'listo'))
                   else C_GRAY)
-            self.screen.blit(self.font_slot.render(ln[:120], True, lc), (30, y_log))
+            self.screen.blit(font_log.render(ln[:160], True, lc), (30, y_log))
             y_log += line_h
 
         # ── Status message ───────────────────────────────────────────────

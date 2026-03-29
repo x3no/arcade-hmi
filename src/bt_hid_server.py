@@ -337,18 +337,50 @@ def setup_adapter():
             @dbus.service.method('org.bluez.Profile1',
                                  in_signature='oha{sv}', out_signature='')
             def NewConnection(self, path, fd, props):
-                # Without PSM in opts this shouldn't be called, but close the
-                # fd if it is to avoid a file-descriptor leak.
+                # This should NOT be called because we registered without a PSM
+                # (BlueZ should NOT intercept our raw L2CAP sockets).
+                # If it IS called it means BlueZ is routing the connection here
+                # instead of to our raw sockets — that would explain why nothing works.
+                raw_fd = fd.take()
+                log.warning(
+                    f'[Profile] NewConnection CALLED — BlueZ is intercepting L2CAP! '
+                    f'path={path} fd={raw_fd} props={dict(props)} '
+                    f'This is BAD — raw sockets will never see the connection.'
+                )
+                # Do NOT close the fd immediately; keep the connection alive
+                # long enough for the ctrl_handler to negotiate HIDP.
+                # Store it so the connection loop can pick it up.
                 try:
-                    os.close(fd.take())
-                except Exception:
-                    pass
+                    import socket as _socket
+                    conn = _socket.fromfd(raw_fd, _socket.AF_BLUETOOTH,
+                                          _socket.SOCK_SEQPACKET)
+                    os.close(raw_fd)   # fromfd dup'd it
+                    log.warning('[Profile] Stored D-Bus fd as ctrl socket; keyboard MAY work via this path')
+                    # Hand off to ctrl_handler if we have no ctrl yet
+                    if self._server._ctrl is None:
+                        threading.Thread(
+                            target=self._server._ctrl_handler,
+                            args=(conn,),
+                            daemon=True,
+                        ).start()
+                        with self._server._lock:
+                            self._server._ctrl = conn
+                    else:
+                        conn.close()
+                except Exception as e:
+                    log.error(f'[Profile] NewConnection fd handling failed: {e}')
+                    try:
+                        os.close(raw_fd)
+                    except Exception:
+                        pass
 
             @dbus.service.method('org.bluez.Profile1',
                                  in_signature='o', out_signature='')
-            def RequestDisconnection(self, path): pass
+            def RequestDisconnection(self, path):
+                log.info(f'[Profile] RequestDisconnection path={path}')
 
-        _Profile(bus, DBUS_PROFILE_PATH)
+        profile_obj = _Profile(bus, DBUS_PROFILE_PATH)
+        profile_obj._server = None  # will be set by BTKeyboardServer after construction
 
         # RegisterProfile publishes the SDP record.
         # No PSM key → BlueZ registers SDP only; our raw sockets accept L2CAP.
@@ -434,13 +466,13 @@ def setup_adapter():
         log.info(f'Verifying SDP via: sdptool browse {own_mac}')
         _diag(['sdptool', 'browse', own_mac])
 
-        return mgr, loop
+        return mgr, loop, bus, profile_obj
 
     except Exception as e:
         log.error(f'D-Bus adapter setup failed: {e}')
         import traceback
         log.error(traceback.format_exc())
-        return None, None
+        return None, None, None, None
 
 
 # ── Main server class ───────────────────────────────────────────────────
@@ -537,6 +569,7 @@ class BTKeyboardServer:
             intr_srv.listen(1)
             log.info('Both L2CAP sockets listening — waiting for host PC connection...')
 
+            log.info(f'Blocking on ctrl_srv.accept() PSM {CTRL_PSM:#x}...')
             ctrl_client, addr = ctrl_srv.accept()
             log.info(f'Host connected on CTRL PSM {CTRL_PSM:#x} from {addr[0]}')
             # Start ctrl handler NOW so Windows doesn't timeout waiting for replies
@@ -553,7 +586,6 @@ class BTKeyboardServer:
         finally:
             ctrl_srv.close()
             intr_srv.close()
-
     def _connection_loop(self):
         """Background thread: accept connections, update active sockets."""
         while True:
@@ -578,6 +610,12 @@ class BTKeyboardServer:
                 log.error(f"Bluetooth error: {e}")
                 time.sleep(3)
             finally:
+                # Explicitly close client sockets so PSM ports are freed for rebind
+                for sock in (ctrl, intr):
+                    try:
+                        sock.close()
+                    except Exception:
+                        pass
                 with self._lock:
                     self._ctrl = None
                     self._intr = None
@@ -627,7 +665,9 @@ class BTKeyboardServer:
             pass
 
     def run(self):
-        bt_mgr, bt_loop = setup_adapter()
+        bt_mgr, bt_loop, bt_bus, bt_profile = setup_adapter()
+        if bt_profile is not None:
+            bt_profile._server = self  # let NewConnection hand off to us
 
         threading.Thread(target=self._connection_loop, daemon=True).start()
 
