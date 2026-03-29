@@ -2,17 +2,19 @@
 """
 Bluetooth HID Keyboard server for Raspberry Pi Zero 2W.
 
-Exposes the Pi as a Bluetooth HID keyboard to a host PC and accepts
-key commands from the arcade app via a local Unix domain socket.
+Strategy:
+  - Registers HID SDP record via BlueZ D-Bus ProfileManager1.RegisterProfile
+    so Windows recognises the Pi as a keyboard during pairing.
+  - Handles L2CAP connections with raw sockets on:
+      PSM 17 (control)   — responds to HIDP SET_PROTOCOL / GET_PROTOCOL
+      PSM 19 (interrupt) — sends 10-byte HID input reports
+  - Accepts key commands from the arcade app via Unix socket
+    /var/run/arcade-hid.sock   (2-byte request: [modifier, keycode])
 
 Requirements:
   - bluetoothd running with -C (compat) flag  [configured by setup.sh]
-  - bluez-tools installed (hciconfig, sdptool) [installed by setup.sh]
+  - python3-dbus, python3-gi                  [installed by setup.sh]
   - root privileges (L2CAP PSM < 0x1001 requires root)
-
-Protocol (Unix socket, path: /var/run/arcade-hid.sock):
-  Client → Server : 2 bytes  [modifier_byte, keycode_byte]
-  Server → Client : 1 byte   [0x01 = sent OK, 0x00 = host not connected]
 """
 
 import os
@@ -20,9 +22,17 @@ import sys
 import time
 import socket
 import threading
-import subprocess
 import logging
 import signal
+
+try:
+    import dbus
+    import dbus.service
+    import dbus.mainloop.glib
+    from gi.repository import GLib
+    HAS_DBUS = True
+except ImportError:
+    HAS_DBUS = False
 
 logging.basicConfig(
     level=logging.INFO,
@@ -34,6 +44,11 @@ log = logging.getLogger('bt-hid')
 UNIX_SOCK_PATH = '/var/run/arcade-hid.sock'
 CTRL_PSM       = 0x11   # L2CAP PSM 17 — HID Control
 INTR_PSM       = 0x13   # L2CAP PSM 19 — HID Interrupt (key reports sent here)
+BDADDR_ANY     = '00:00:00:00:00:00'
+
+# D-Bus identifiers for BlueZ HID profile registration
+DBUS_PROFILE_PATH = '/org/bluez/arcade_hid'
+HID_UUID          = '00001124-0000-1000-8000-00805f9b34fb'
 
 # Bluetooth HID report
 HID_INPUT  = 0xA1
@@ -41,56 +56,158 @@ REPORT_ID  = 0x01
 RELEASE    = bytes([HID_INPUT, REPORT_ID, 0, 0, 0, 0, 0, 0, 0, 0])
 
 # HIDP control channel message types (upper nibble of first byte)
-HIDP_HANDSHAKE     = 0x00
-HIDP_CONTROL       = 0x10
-HIDP_GET_REPORT    = 0x40
-HIDP_SET_REPORT    = 0x50
-HIDP_GET_PROTOCOL  = 0x60
-HIDP_SET_PROTOCOL  = 0x70
-HIDP_DATA          = 0xA0
+HIDP_HANDSHAKE        = 0x00
+HIDP_CONTROL          = 0x10
+HIDP_GET_REPORT       = 0x40
+HIDP_SET_REPORT       = 0x50
+HIDP_GET_PROTOCOL     = 0x60
+HIDP_SET_PROTOCOL     = 0x70
+HIDP_DATA             = 0xA0
+HIDP_VIRTUAL_UNPLUG   = 0x05
 
-HIDP_HANDSHAKE_SUCCESS  = 0x00
-HIDP_VIRTUAL_CABLE_UNPLUG = 0x05
+# HID report descriptor — standard keyboard with keycodes 0x00-0xFF
+_HID_DESC = bytes([
+    0x05, 0x01, 0x09, 0x06, 0xa1, 0x01,
+    0x05, 0x07, 0x19, 0xe0, 0x29, 0xe7,
+    0x15, 0x00, 0x25, 0x01, 0x75, 0x01,
+    0x95, 0x08, 0x81, 0x02, 0x95, 0x01,
+    0x75, 0x08, 0x81, 0x03, 0x95, 0x05,
+    0x75, 0x01, 0x05, 0x08, 0x19, 0x01,
+    0x29, 0x05, 0x91, 0x02, 0x95, 0x01,
+    0x75, 0x03, 0x91, 0x03, 0x95, 0x06,
+    0x75, 0x08, 0x15, 0x00, 0x26, 0xff,
+    0x00, 0x05, 0x07, 0x19, 0x00, 0x29,
+    0xff, 0x81, 0x00, 0xc0,
+])
+
+# SDP record XML published via BlueZ D-Bus so Windows recognises a keyboard
+_SDP_RECORD = f"""<?xml version="1.0" encoding="UTF-8"?>
+<record>
+  <attribute id="0x0001">
+    <sequence><uuid value="0x1124"/></sequence>
+  </attribute>
+  <attribute id="0x0004">
+    <sequence>
+      <sequence><uuid value="0x0100"/><uint16 value="0x0011"/></sequence>
+      <sequence><uuid value="0x0011"/></sequence>
+    </sequence>
+  </attribute>
+  <attribute id="0x0005">
+    <sequence><uuid value="0x1002"/></sequence>
+  </attribute>
+  <attribute id="0x0009">
+    <sequence>
+      <sequence><uuid value="0x1124"/><uint16 value="0x0100"/></sequence>
+    </sequence>
+  </attribute>
+  <attribute id="0x000d">
+    <sequence><sequence>
+      <sequence><uuid value="0x0100"/><uint16 value="0x0013"/></sequence>
+      <sequence><uuid value="0x0011"/></sequence>
+    </sequence></sequence>
+  </attribute>
+  <attribute id="0x0100"><text value="Arcade HID Keyboard"/></attribute>
+  <attribute id="0x0101"><text value="Arcade Control"/></attribute>
+  <attribute id="0x0200"><uint16 value="0x0100"/></attribute>
+  <attribute id="0x0201"><uint16 value="0x0111"/></attribute>
+  <attribute id="0x0202"><uint8  value="0x40"/></attribute>
+  <attribute id="0x0203"><uint8  value="0x00"/></attribute>
+  <attribute id="0x0204"><boolean value="false"/></attribute>
+  <attribute id="0x0205"><boolean value="false"/></attribute>
+  <attribute id="0x0206">
+    <sequence><sequence>
+      <uint8 value="0x22"/>
+      <text encoding="hex" value="{_HID_DESC.hex()}"/>
+    </sequence></sequence>
+  </attribute>
+  <attribute id="0x020b"><uint16 value="0x0100"/></attribute>
+  <attribute id="0x020c"><uint16 value="0x0c80"/></attribute>
+  <attribute id="0x020d"><boolean value="false"/></attribute>
+  <attribute id="0x020e"><boolean value="false"/></attribute>
+  <attribute id="0x020f"><uint16 value="0x0640"/></attribute>
+  <attribute id="0x0210"><uint16 value="0x0320"/></attribute>
+</record>"""
 
 
-# ── Adapter / SDP setup ──────────────────────────────────────────────────
-
-def _run(cmd):
-    r = subprocess.run(cmd, capture_output=True, text=True, check=False)
-    if r.returncode != 0:
-        detail = (r.stderr or r.stdout).strip()
-        log.warning(f"{' '.join(cmd)} failed: {detail}")
-    return r.returncode == 0
-
+# ── Adapter and SDP setup via BlueZ D-Bus ────────────────────────────────────
 
 def setup_adapter():
-    """Configure BT adapter as an HID keyboard and register SDP record."""
-    _run(['hciconfig', 'hci0', 'up'])
-    _run(['hciconfig', 'hci0', 'class', '0x002540'])   # Peripheral / Keyboard
-    _run(['hciconfig', 'hci0', 'piscan'])               # discoverable + connectable
-    _run(['hciconfig', 'hci0', 'name', 'Arcade HID Keyboard'])
+    """
+    Configure BT adapter properties and publish the HID SDP record using
+    BlueZ's ProfileManager1.RegisterProfile D-Bus API.
 
-    # Register HID SDP record.
-    # Requires bluetoothd -C (compat mode) — /var/run/sdp must exist.
-    # Wait up to 5 s for bluetoothd to create the socket.
-    sdp_socket = '/var/run/sdp'
-    for _ in range(10):
-        if os.path.exists(sdp_socket):
-            break
-        log.info("Waiting for bluetoothd compat socket /var/run/sdp...")
-        time.sleep(0.5)
+    Registering WITHOUT a PSM means BlueZ publishes the SDP record but does
+    NOT intercept L2CAP connections — our raw sockets handle those instead.
+    This is more reliable than sdptool, which fails on BlueZ 5.x.
+    """
+    if not HAS_DBUS:
+        log.error('python3-dbus not available — cannot register SDP record')
+        return
 
-    if not os.path.exists(sdp_socket):
-        log.warning("bluetoothd compat socket not found — SDP record not registered. "
-                    "Ensure bluetoothd runs with -C flag.")
-    else:
-        _run(['sdptool', 'del', '0x00010001'])
-        if _run(['sdptool', 'add', '--handle=0x00010001', 'HID']):
-            log.info("SDP HID record registered")
-        else:
-            log.warning("sdptool add HID failed — Windows may not recognise the keyboard profile")
+    try:
+        dbus.mainloop.glib.DBusGMainLoop(set_as_default=True)
+        bus = dbus.SystemBus()
 
-    log.info("BT adapter configured as HID keyboard")
+        # Set adapter properties via D-Bus (proper BlueZ API, not deprecated hciconfig)
+        adapter = dbus.Interface(
+            bus.get_object('org.bluez', '/org/bluez/hci0'),
+            'org.freedesktop.DBus.Properties',
+        )
+        for prop, val in [
+            ('Powered',             dbus.Boolean(True)),
+            ('Discoverable',        dbus.Boolean(True)),
+            ('Pairable',            dbus.Boolean(True)),
+            ('DiscoverableTimeout', dbus.UInt32(0)),
+            ('PairableTimeout',     dbus.UInt32(0)),
+            ('Alias',               dbus.String('Arcade HID Keyboard')),
+        ]:
+            try:
+                adapter.Set('org.bluez.Adapter1', prop, val)
+            except Exception as e:
+                log.warning(f'Set adapter {prop}: {e}')
+
+        # Minimal Profile1 stub — BlueZ requires a D-Bus object at the profile path
+        class _Profile(dbus.service.Object):
+            @dbus.service.method('org.bluez.Profile1',
+                                 in_signature='', out_signature='')
+            def Release(self): pass
+
+            @dbus.service.method('org.bluez.Profile1',
+                                 in_signature='oha{sv}', out_signature='')
+            def NewConnection(self, path, fd, props):
+                # Without PSM in opts this shouldn't be called, but close the
+                # fd if it is to avoid a file-descriptor leak.
+                try:
+                    os.close(fd.take())
+                except Exception:
+                    pass
+
+            @dbus.service.method('org.bluez.Profile1',
+                                 in_signature='o', out_signature='')
+            def RequestDisconnection(self, path): pass
+
+        _Profile(bus, DBUS_PROFILE_PATH)
+
+        # RegisterProfile publishes the SDP record.
+        # No PSM key → BlueZ registers SDP only; our raw sockets accept L2CAP.
+        mgr = dbus.Interface(
+            bus.get_object('org.bluez', '/org/bluez'),
+            'org.bluez.ProfileManager1',
+        )
+        mgr.RegisterProfile(DBUS_PROFILE_PATH, HID_UUID, {
+            'ServiceRecord':         dbus.String(_SDP_RECORD),
+            'RequireAuthentication': dbus.Boolean(False),
+            'RequireAuthorization':  dbus.Boolean(False),
+            'AutoConnect':           dbus.Boolean(False),
+        })
+        log.info('HID SDP record registered via D-Bus — Windows will see keyboard profile')
+
+        # Run the GLib event loop in a daemon thread to keep D-Bus alive
+        loop = GLib.MainLoop()
+        threading.Thread(target=loop.run, daemon=True).start()
+
+    except Exception as e:
+        log.error(f'D-Bus adapter setup failed: {e}')
 
 
 # ── Main server class ───────────────────────────────────────────────────
@@ -120,20 +237,18 @@ class BTKeyboardServer:
                 param = msg & 0x0F   # lower nibble = parameter
 
                 if mtype == HIDP_SET_PROTOCOL:
-                    # Windows sends this to switch between boot(0) and report(1) mode
                     log.info(f"SET_PROTOCOL {'report' if param else 'boot'}")
-                    ctrl.send(bytes([HIDP_HANDSHAKE_SUCCESS]))
+                    ctrl.send(bytes([HIDP_HANDSHAKE]))
 
                 elif mtype == HIDP_GET_PROTOCOL:
-                    # Respond: we're in report protocol (1)
                     ctrl.send(bytes([HIDP_DATA | 0x01]))
 
                 elif mtype in (HIDP_GET_REPORT, HIDP_SET_REPORT):
-                    ctrl.send(bytes([HIDP_HANDSHAKE_SUCCESS]))
+                    ctrl.send(bytes([HIDP_HANDSHAKE]))
 
                 elif mtype == HIDP_CONTROL:
-                    if param == HIDP_VIRTUAL_CABLE_UNPLUG:
-                        log.info("Virtual cable unplug")
+                    if param == HIDP_VIRTUAL_UNPLUG:
+                        log.info('Virtual cable unplug')
                         break
                 # other messages: silently ignore
 
@@ -161,8 +276,8 @@ class BTKeyboardServer:
         try:
             ctrl_srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
             intr_srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-            ctrl_srv.bind(('00:00:00:00:00:00', CTRL_PSM))
-            intr_srv.bind(('00:00:00:00:00:00', INTR_PSM))
+            ctrl_srv.bind((BDADDR_ANY, CTRL_PSM))
+            intr_srv.bind((BDADDR_ANY, INTR_PSM))
             ctrl_srv.listen(1)
             intr_srv.listen(1)
             log.info("Waiting for Bluetooth HID connection from host PC…")
@@ -281,29 +396,3 @@ class BTKeyboardServer:
 
 if __name__ == '__main__':
     BTKeyboardServer().run()
-
-import os
-import sys
-import time
-import socket
-import threading
-import subprocess
-import logging
-import signal
-
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s %(levelname)s %(message)s',
-    handlers=[logging.StreamHandler(sys.stdout)],
-)
-log = logging.getLogger('bt-hid')
-
-UNIX_SOCK_PATH = '/var/run/arcade-hid.sock'
-CTRL_PSM       = 0x11   # L2CAP PSM 17 — HID Control
-INTR_PSM       = 0x13   # L2CAP PSM 19 — HID Interrupt (key reports sent here)
-
-# First byte of an HID INPUT report over Bluetooth
-HID_INPUT  = 0xA1
-REPORT_ID  = 0x01
-# All-zeros release report
-RELEASE    = bytes([HID_INPUT, REPORT_ID, 0, 0, 0, 0, 0, 0, 0, 0])

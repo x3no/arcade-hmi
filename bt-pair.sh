@@ -50,7 +50,7 @@ agent NoInputNoOutput
 default-agent
 discoverable on
 pairable on
-discoverable-timeout 120
+discoverable-timeout 0
 BT_SETUP
 
 echo ""
@@ -93,8 +93,6 @@ done
 echo ""
 echo "Timeout reached — no pairing detected."
 echo "Make sure Bluetooth is enabled on the host PC and try again."
-bluetoothctl << 'BT_CANCEL'
-discoverable off
-pairable off
-BT_CANCEL
+echo "The Pi will REMAIN discoverable as 'Arcade HID Keyboard'."
+echo "You can retry pairing from Windows without running this script again."
 exit 1

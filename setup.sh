@@ -41,7 +41,7 @@ pip3 install --break-system-packages -r requirements.txt || true
 echo "Configuring Bluetooth HID (keyboard via Bluetooth to host PC)..."
 
 # Install Bluetooth packages
-apt-get install -y bluez bluez-tools
+apt-get install -y bluez bluez-tools python3-dbus python3-gi
 
 # Configure BlueZ: advertise as HID keyboard, always discoverable
 cat > /etc/bluetooth/main.conf << 'BTEOF'
