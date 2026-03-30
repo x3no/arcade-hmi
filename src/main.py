@@ -43,7 +43,7 @@ C_BTN    = (55,  55,  55)   # Action button background
 class SimpleButton:
     """Simple square button: black fill, white 3px border, white text."""
 
-    def __init__(self, rect, text, color=None, action=None, icon=None, hold_action=None):
+    def __init__(self, rect, text, color=None, action=None, icon=None, hold_action=None, disabled=False):
         self.rect = pygame.Rect(rect)
         self.text = text
         self.action = action
@@ -52,13 +52,21 @@ class SimpleButton:
         self._hold_fired = False        # True once repeat has started
         self.is_pressed = False
         self.icon = icon
+        self.disabled = disabled
 
     def draw(self, surface, font, font_icon=None):
-        bg = C_ORANGE if self.is_pressed else C_BTN
+        C_DISABLED_BG   = (25, 25, 25)
+        C_DISABLED_TEXT = (70, 70, 70)
+        if self.disabled:
+            bg   = C_DISABLED_BG
+            fg   = C_DISABLED_TEXT
+        else:
+            bg = C_ORANGE if self.is_pressed else C_BTN
+            fg = C_WHITE
         pygame.draw.rect(surface, bg, self.rect)
         if self.icon and font_icon:
-            icon_surf = font_icon.render(self.icon, True, C_WHITE)
-            text_surf = font.render(self.text, True, C_WHITE)
+            icon_surf = font_icon.render(self.icon, True, fg)
+            text_surf = font.render(self.text, True, fg)
             gap       = 6
             total_h   = icon_surf.get_height() + gap + text_surf.get_height()
             top       = self.rect.centery - total_h // 2
@@ -66,10 +74,12 @@ class SimpleButton:
             surface.blit(text_surf, text_surf.get_rect(centerx=self.rect.centerx,
                                                         top=top + icon_surf.get_height() + gap))
         else:
-            text_surf = font.render(self.text, True, C_WHITE)
+            text_surf = font.render(self.text, True, fg)
             surface.blit(text_surf, text_surf.get_rect(center=self.rect.center))
 
     def handle_event(self, event):
+        if self.disabled:
+            return False
         if event.type == MOUSEBUTTONDOWN:
             if self.rect.collidepoint(event.pos):
                 self.is_pressed = True
@@ -220,7 +230,7 @@ class ScrollMenu:
             self.drag_last_t   = pygame.time.get_ticks()
             self.velocity      = 0.0
             for btn in self.buttons:
-                if self._screen_rect(btn).collidepoint(event.pos):
+                if self._screen_rect(btn).collidepoint(event.pos) and not getattr(btn, 'disabled', False):
                     btn.is_pressed   = True
                     btn._press_time  = pygame.time.get_ticks()
                     btn._hold_fired  = False
@@ -280,21 +290,29 @@ class ScrollMenu:
         return False
 
     def draw(self, surface, font, font_icon=None):
+        C_DISABLED_BG   = (25, 25, 25)
+        C_DISABLED_TEXT = (70, 70, 70)
         clip = surface.get_clip()
         surface.set_clip(self.rect)
         for btn in self.buttons:
             sr = self._screen_rect(btn)
             if sr.right <= self.rect.left or sr.left >= self.rect.right:
                 continue
-            bg = C_ORANGE if btn.is_pressed else C_BTN
+            disabled = getattr(btn, 'disabled', False)
+            if disabled:
+                bg = C_DISABLED_BG
+                fg = C_DISABLED_TEXT
+            else:
+                bg = C_ORANGE if btn.is_pressed else C_BTN
+                fg = C_WHITE
             # Draw button with cut bottom-right corner
             c = 40  # corner cut size
             l, t, r, b = sr.left, sr.top, sr.right, sr.bottom
             pts = [(l, t), (r, t), (r, b - c), (r - c, b), (l, b)]
             pygame.draw.polygon(surface, bg, pts)
             if btn.icon and font_icon:
-                icon_surf = font_icon.render(btn.icon, True, C_WHITE)
-                text_surf = font.render(btn.text, True, C_WHITE)
+                icon_surf = font_icon.render(btn.icon, True, fg)
+                text_surf = font.render(btn.text, True, fg)
                 gap       = 6
                 total_h   = icon_surf.get_height() + gap + text_surf.get_height()
                 top       = sr.centery - total_h // 2
@@ -302,7 +320,7 @@ class ScrollMenu:
                 surface.blit(text_surf, text_surf.get_rect(centerx=sr.centerx,
                                                             top=top + icon_surf.get_height() + gap))
             else:
-                text_surf = font.render(btn.text, True, C_WHITE)
+                text_surf = font.render(btn.text, True, fg)
                 surface.blit(text_surf, text_surf.get_rect(center=sr.center))
         surface.set_clip(clip)
 
@@ -395,13 +413,25 @@ class ArcadeControlApp:
         self.bt_close_btn     = None
         self.bt_diagnose_btn  = None
         self.bt_connected = False  # live BT connection indicator
+        self.wifi_connected = False
+        self.pc_on = False          # driven by GPIO Power LED
+        self.pc_on_since = None     # time.time() when PC turned on
+        self.hdd_on = False         # driven by GPIO HDD LED
+        self.coin_p1_count = 0
+        self.coin_p2_count = 0
+        self.weather_data = None    # {'temp': float, 'condition': str}
         self._start_bt_status_poller()
+        self._start_wifi_poller()
+        self._start_weather_poller()
         self.current_tab  = 'sistema'
         self.current_slot = 0  # 0 = general, 1-9 = save slots
 
         # Hardware controllers
         self.hid = None
         self.gpio = GPIOController(self.config['gpio_power_pin'])
+        self.pc_on = self.gpio.read_power_led()
+        self.pc_on_since = time.time() if self.pc_on else None
+        self._start_gpio_poller()
 
         # Clock
         self.clock = pygame.time.Clock()
@@ -490,47 +520,61 @@ class ArcadeControlApp:
         def make_scroll(y, h, btns):
             return ScrollMenu((0, y, self.width, h), btns, btn_w=340, btn_gap=20)
 
-        CLOCK_H  = 50                        # space reserved at bottom for the clock
+        CLOCK_H  = 60                        # reserved for bottom status bar
         h_norm = self.height - CONT_Y - CLOCK_H
         h_part = self.height - CONT_Y_P - CLOCK_H
 
         self.partida_general_btns = [
-            SimpleButton((0,0,0,0), "PAUSAR",       action=self.pause_game,    icon='\ue034'),  # pause
-            SimpleButton((0,0,0,0), "INFO",         action=self.game_info,     icon='\ue88e'),  # info
-            SimpleButton((0,0,0,0), "FAST FORWARD", action=self.fast_forward,  icon='\ue01f'),  # fast_forward
-            SimpleButton((0,0,0,0), "SCREENSHOT",   action=self.screenshot,    icon='\ue3b0'),  # add_a_photo
-            SimpleButton((0,0,0,0), "MENU",         action=self.mame_menu,     icon='\ue5d2'),  # menu
-            SimpleButton((0,0,0,0), "REINICIAR",    action=self.restart_game,  icon='\ue5d5'),  # refresh
-            SimpleButton((0,0,0,0), "SALIR",        action=self.exit_game,     icon='\ue9ba'),  # exit_to_app
+            SimpleButton((0,0,0,0), "PAUSAR",       action=self.pause_game,    icon='\ue034', disabled=True),
+            SimpleButton((0,0,0,0), "INFO",         action=self.game_info,     icon='\ue88e', disabled=True),
+            SimpleButton((0,0,0,0), "FAST FORWARD", action=self.fast_forward,  icon='\ue01f', disabled=True),
+            SimpleButton((0,0,0,0), "SCREENSHOT",   action=self.screenshot,    icon='\ue3b0', disabled=True),
+            SimpleButton((0,0,0,0), "MENU",         action=self.mame_menu,     icon='\ue5d2', disabled=True),
+            SimpleButton((0,0,0,0), "REINICIAR",    action=self.restart_game,  icon='\ue5d5', disabled=True),
+            SimpleButton((0,0,0,0), "SALIR",        action=self.exit_game,     icon='\ue9ba', disabled=True),
         ]
         self.partida_slot_btns = [
-            SimpleButton((0,0,0,0), "SAVE", action=self.save_state, icon='\ue161'),  # save
-            SimpleButton((0,0,0,0), "LOAD", action=self.load_state, icon='\ue2c4'),  # folder_open
+            SimpleButton((0,0,0,0), "SAVE", action=self.save_state, icon='\ue161', disabled=True),
+            SimpleButton((0,0,0,0), "LOAD", action=self.load_state, icon='\ue2c4', disabled=True),
         ]
         self.partida_general_scroll = make_scroll(CONT_Y_P, h_part, self.partida_general_btns)
         self.partida_slot_scroll    = make_scroll(CONT_Y_P, h_part, self.partida_slot_btns)
 
+        self.power_btn = SimpleButton(
+            (0,0,0,0), 'ENCENDER PC', action=self.toggle_power_confirm, icon='\ue8ac'
+        )
+        self.reset_btn = SimpleButton(
+            (0,0,0,0), 'REINICIAR PC', action=self.reset_pc_confirm, icon='\ue5d5', disabled=True
+        )
         self.tab_scroll_menus = {
             'sistema':  make_scroll(CONT_Y, h_norm, [
-                SimpleButton((0,0,0,0), "ENCENDER PC",  action=self.power_on_confirm,  icon='\ue1a7'),  # power
-                SimpleButton((0,0,0,0), "APAGAR PC",    action=self.power_off_confirm, icon='\ue8ac'),  # power_off
+                self.power_btn,
+                self.reset_btn,
                 SimpleButton((0,0,0,0), "PANTALLA OFF", action=self.screen_off,        icon='\ue8d9'),  # screen_lock_power
                 SimpleButton((0,0,0,0), "BLOQUEAR",     action=self.lock_screen,       icon='\ue897'),  # lock
-                SimpleButton((0,0,0,0), "DEBUG",        action=self.open_debug,        icon='\ue868'),  # bug_report
+                SimpleButton((0,0,0,0), "WiFi",         action=self.open_debug,        icon='\ue63e'),  # wifi
                 SimpleButton((0,0,0,0), "UPDATE",       action=self.update_confirm,    icon='\ue923'),  # system_update
                 SimpleButton((0,0,0,0), "BLUETOOTH",    action=self.open_bt_screen,    icon='\ue1a8'),  # bluetooth
             ]),
             'sonido':   make_scroll(CONT_Y, h_norm, [
-                SimpleButton((0,0,0,0), "VOL +", action=self.volume_up,   icon='\ue050', hold_action=self.volume_up),
-                SimpleButton((0,0,0,0), "VOL -", action=self.volume_down, icon='\ue04d', hold_action=self.volume_down),
-                SimpleButton((0,0,0,0), "MUTE",  action=self.mute,        icon='\ue04f'),  # volume_off
+                SimpleButton((0,0,0,0), "VOL +", action=self.volume_up,   icon='\ue050', hold_action=self.volume_up,   disabled=True),
+                SimpleButton((0,0,0,0), "VOL -", action=self.volume_down, icon='\ue04d', hold_action=self.volume_down, disabled=True),
+                SimpleButton((0,0,0,0), "MUTE",  action=self.mute,        icon='\ue04f',                               disabled=True),
             ]),
             'monedero': make_scroll(CONT_Y, h_norm, [
-                SimpleButton((0,0,0,0), "COIN P1", action=self.coin_p1, icon='\ue227'),  # monetization_on
-                SimpleButton((0,0,0,0), "COIN P2", action=self.coin_p2, icon='\ue227'),  # monetization_on
+                SimpleButton((0,0,0,0), "COIN P1", action=self.coin_p1, icon='\ue227', disabled=True),
+                SimpleButton((0,0,0,0), "COIN P2", action=self.coin_p2, icon='\ue227', disabled=True),
             ]),
         }
             
+        # Collect all buttons that require an active BT connection
+        self.bt_action_btns = (
+            self.partida_general_btns
+            + self.partida_slot_btns
+            + self.tab_scroll_menus['sonido'].buttons
+            + self.tab_scroll_menus['monedero'].buttons
+        )
+
     def _active_scroll_menu(self):
         """Return the scroll menu for the currently active tab/sub-tab."""
         if self.current_tab == 'partida':
@@ -725,6 +769,13 @@ class ArcadeControlApp:
         except Exception as e:
             print(f"Error sending exit: {e}")
 
+    def toggle_power_confirm(self):
+        """Show confirmation to toggle PC power (on→off or off→on)."""
+        if self.pc_on:
+            self.confirmation_dialog = {'title': '¿Apagar PC?',    'action': self.power_off}
+        else:
+            self.confirmation_dialog = {'title': '¿Encender PC?',  'action': self.power_on}
+
     # Power actions with confirmation
     def power_on_confirm(self):
         """Show confirmation for power on"""
@@ -748,6 +799,18 @@ class ArcadeControlApp:
     def power_off(self):
         """Power off external PC"""
         self.gpio.pulse_power_button(0.2)
+        self.confirmation_dialog = None
+
+    def reset_pc_confirm(self):
+        """Show confirmation for PC reset"""
+        self.confirmation_dialog = {
+            'title': '¿Reiniciar PC?',
+            'action': self.reset_pc,
+        }
+
+    def reset_pc(self):
+        """Pulse the reset button"""
+        self.gpio.pulse_reset_button(0.2)
         self.confirmation_dialog = None
 
     def update_confirm(self):
@@ -860,6 +923,97 @@ class ArcadeControlApp:
                 except Exception:
                     self.bt_connected = False
                 _t.sleep(3)
+        t = threading.Thread(target=_poll, daemon=True)
+        t.start()
+
+    def _start_gpio_poller(self):
+        """Background thread: poll GPIO inputs at 20 Hz for LED and coin state."""
+        import threading
+        def _poll():
+            import time as _t
+            prev_coin1 = False
+            prev_coin2 = False
+            while True:
+                # Power LED → pc_on
+                pc_on = self.gpio.read_power_led()
+                if pc_on and not self.pc_on:
+                    self.pc_on_since = _t.time()
+                elif not pc_on and self.pc_on:
+                    self.pc_on_since = None
+                self.pc_on = pc_on
+
+                # HDD LED
+                self.hdd_on = self.gpio.read_hdd_led()
+
+                # Coin P1 — rising edge
+                coin1 = self.gpio.read_coin1()
+                if coin1 and not prev_coin1:
+                    self.coin_p1_count += 1
+                prev_coin1 = coin1
+
+                # Coin P2 — rising edge
+                coin2 = self.gpio.read_coin2()
+                if coin2 and not prev_coin2:
+                    self.coin_p2_count += 1
+                prev_coin2 = coin2
+
+                _t.sleep(0.05)
+        t = threading.Thread(target=_poll, daemon=True)
+        t.start()
+
+    def _start_wifi_poller(self):
+        """Background thread: check internet connectivity every 30 s."""
+        import threading
+        def _poll():
+            import time as _t, socket
+            while True:
+                connected = False
+                try:
+                    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+                    s.settimeout(2)
+                    s.connect(('8.8.8.8', 80))
+                    s.close()
+                    connected = True
+                except Exception:
+                    pass
+                self.wifi_connected = connected
+                _t.sleep(30)
+        t = threading.Thread(target=_poll, daemon=True)
+        t.start()
+
+    def _start_weather_poller(self):
+        """Background thread: fetch weather for Cervelló (BCN) every 10 min."""
+        import threading
+        # WMO weather interpretation codes → Spanish labels
+        _WMO = {
+            0: 'Despejado', 1: 'Despejado', 2: 'Parcialmente nublado', 3: 'Nublado',
+            45: 'Niebla', 48: 'Niebla',
+            51: 'Llovizna', 53: 'Llovizna', 55: 'Llovizna',
+            61: 'Lluvia', 63: 'Lluvia', 65: 'Lluvia intensa',
+            71: 'Nieve', 73: 'Nieve', 75: 'Nieve intensa',
+            80: 'Chubascos', 81: 'Chubascos', 82: 'Chubascos fuertes',
+            95: 'Tormenta', 96: 'Tormenta', 99: 'Tormenta intensa',
+        }
+        _URL = (
+            'https://api.open-meteo.com/v1/forecast'
+            '?latitude=41.38&longitude=1.95'
+            '&current=temperature_2m,weather_code'
+            '&timezone=Europe%2FMadrid'
+        )
+        def _poll():
+            import time as _t, urllib.request, json
+            while True:
+                if self.wifi_connected:
+                    try:
+                        with urllib.request.urlopen(_URL, timeout=10) as resp:
+                            data = json.loads(resp.read())
+                        temp = data['current']['temperature_2m']
+                        code = int(data['current']['weather_code'])
+                        cond = _WMO.get(code, f'Cód {code}')
+                        self.weather_data = {'temp': temp, 'condition': cond}
+                    except Exception:
+                        pass
+                _t.sleep(600)
         t = threading.Thread(target=_poll, daemon=True)
         t.start()
 
@@ -1371,9 +1525,49 @@ class ArcadeControlApp:
     def draw_main_screen_base(self):
         self.screen.fill(self.bg_color)
 
-        # Title
-        title = self.font.render("ARCADE CONTROL", True, C_WHITE)
-        self.screen.blit(title, title.get_rect(center=(self.width // 2, 48)))
+        # ── Top status bar ────────────────────────────────────────────────────
+        BAR_CY = 44   # vertical centre of the bar (fits inside 0-89px before tabs)
+        MARGIN = 20
+
+        # Clock — top left
+        datetime_str = datetime.now(ZoneInfo('Europe/Madrid')).strftime('%d-%m-%Y  %H:%M:%S')
+        time_surf = self.font_mono.render(datetime_str, True, C_GRAY)
+        clock_rect = time_surf.get_rect(midleft=(MARGIN, BAR_CY))
+        self.screen.blit(time_surf, clock_rect)
+
+        # Weather — right of clock (only when WiFi up and data available)
+        if self.wifi_connected and self.weather_data:
+            wx_str  = f"{self.weather_data['temp']:.0f}°C  {self.weather_data['condition']}"
+            wx_surf = self.font_mono.render(wx_str, True, (180, 210, 255))
+            self.screen.blit(wx_surf, wx_surf.get_rect(midleft=(clock_rect.right + 22, BAR_CY)))
+
+        # Right-side indicators (rendered right→left: BT, HDD, PC, WiFi)
+        DOT_R = 7
+        x = self.width - MARGIN
+        for label, connected in [('BT',   self.bt_connected),
+                                   ('HDD',  self.hdd_on),
+                                   ('PC',   self.pc_on),
+                                   ('WiFi', self.wifi_connected)]:
+            color    = (0, 210, 100) if connected else (120, 120, 120)
+            lbl_surf = self.font_mono.render(label, True, color)
+            lbl_rect = lbl_surf.get_rect(midright=(x, BAR_CY))
+            dot_cx   = lbl_rect.left - 10
+            pygame.draw.circle(self.screen, color, (dot_cx, BAR_CY), DOT_R)
+            self.screen.blit(lbl_surf, lbl_rect)
+            x = dot_cx - 20
+
+        # Keep power button label/icon in sync with PC state
+        if self.pc_on:
+            self.power_btn.text = 'APAGAR PC'
+            self.power_btn.icon = '\ue8ac'
+        else:
+            self.power_btn.text = 'ENCENDER PC'
+            self.power_btn.icon = '\ue8ac'
+        # Reset button only active while PC is on
+        self.reset_btn.disabled = not self.pc_on
+        # BT-dependent buttons only active while BT is connected
+        for btn in self.bt_action_btns:
+            btn.disabled = not self.bt_connected
 
         # Main tab bar
         for btn in self.tab_buttons:
@@ -1387,20 +1581,21 @@ class ArcadeControlApp:
         # Scrollable content area for active tab
         self._active_scroll_menu().draw(self.screen, self.font_action, self.font_icon_action)
 
-        # Clock — bottom center, monospace, gray
-        datetime_str = datetime.now(ZoneInfo('Europe/Madrid')).strftime('%d-%m-%Y  %H:%M:%S')
-        time_surf = self.font_mono.render(datetime_str, True, C_GRAY)
-        clock_rect = time_surf.get_rect(centerx=self.width // 2, centery=self.height - 120)
-        self.screen.blit(time_surf, clock_rect)
+        # ── Bottom status bar ────────────────────────────────────────────────
+        BAR_BOT_CY = self.height - 30
+        # Coin counters — left
+        coin_str  = f'P1: {self.coin_p1_count}   P2: {self.coin_p2_count}'
+        coin_surf = self.font_mono.render(coin_str, True, C_GRAY)
+        self.screen.blit(coin_surf, coin_surf.get_rect(midleft=(MARGIN, BAR_BOT_CY)))
+        # PC uptime — right (only while PC is on)
+        if self.pc_on and self.pc_on_since is not None:
+            elapsed = int(time.time() - self.pc_on_since)
+            h = elapsed // 3600
+            m = (elapsed % 3600) // 60
+            s = elapsed % 60
+            up_surf = self.font_mono.render(f'PC  {h:02d}:{m:02d}:{s:02d}', True, (0, 210, 100))
+            self.screen.blit(up_surf, up_surf.get_rect(midright=(self.width - MARGIN, BAR_BOT_CY)))
 
-        # BT indicator — right of clock
-        bt_color = (0, 210, 100) if self.bt_connected else (120, 120, 120)
-        bt_label = self.font_mono.render('BT', True, bt_color)
-        dot_x = clock_rect.right + 18
-        dot_y = clock_rect.centery
-        pygame.draw.circle(self.screen, bt_color, (dot_x, dot_y), 7)
-        self.screen.blit(bt_label, bt_label.get_rect(midleft=(dot_x + 12, dot_y)))
-        
     def draw_main_screen(self):
         """Draw main control interface"""
         self.draw_main_screen_base()
