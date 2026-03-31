@@ -8,7 +8,7 @@ Aplicación de control táctil a pantalla completa para máquina arcade. Permite
 - **Pantalla de bloqueo** con PIN numérico (por defecto: 1234)
 - **Control de monedas** para jugador 1 y 2
 - **Control de volumen** (subir, bajar, silenciar)
-- **Control de encendido/apagado** del PC mediante optoacoplador en GPIO
+- **Optoacopladores conectados a GPIO** para control del PC y detección de monedas
 - **Modo standby** para pantalla OLED (pantalla negra cuando no se usa)
 - **Arranque ultra rápido** (~2-3 segundos)
 - **Confirmaciones** para acciones críticas (encender/apagar PC)
@@ -120,17 +120,103 @@ Edita `gpio_power_pin` en `config/settings.json` o pasa el parámetro al crear e
 
 ## 🔌 Conexión de Hardware
 
-### Optoacoplador (Encendido/Apagado PC)
+### ⚠️ Niveles de tensión — GPIO 3.3 V
+
+La Raspberry Pi Zero 2 W opera a **3.3 V** en todos sus pines GPIO. Esto tiene dos implicaciones clave:
+
+| Módulo | Lado entrada optoacoplador | Lado salida optoacoplador |
+|--------|---------------------------|---------------------------|
+| #1, #2 (salida) | Alimentado por GPIO (3.3 V) — suficiente para disparar el LED IR | `VCC` sin conectar (actúa como interruptor pasivo) |
+| #3–#6 (entrada) | Alimentado por señal externa (PC / monedero) | **`VCC` debe ir a 3.3 V**, NO a 5 V — si `Output` llegara a 5 V dañaría el GPIO |
+
+> **Regla fácil:** los módulos cuyo `Output` va a un GPIO de la Pi deben tener su `VCC` en **3.3 V (Pin 1 ó Pin 17)**, nunca en 5 V.
+
+### Optoacopladores — GPIO Raspberry Pi
+
+Se utilizan **6 módulos optoacopladores** conectados al conector GPIO de 40 pines de la Raspberry Pi.
+
+#### Pinout utilizado
+
+| Pin físico | Nombre      | Dirección | Función              |
+|-----------|-------------|-----------|----------------------|
+| Pin 1     | 3.3 V ⚡    | —         | VCC módulos #3–#6    |
+| Pin 11    | GPIO 17 🔴  | Salida    | Power Button         |
+| Pin 12    | GPIO 18 🔴  | Salida    | Reset Button         |
+| Pin 13    | GPIO 27 🟢  | Entrada   | Coin P1              |
+| Pin 14    | GND 🟫      | —         | Tierra común (todos) |
+| Pin 15    | GPIO 22 🟡  | Entrada   | Power LED            |
+| Pin 16    | GPIO 23 🟡  | Entrada   | HDD LED              |
+| Pin 18    | GPIO 24 🟢  | Entrada   | Coin P2              |
+
+> Pin 2 (5 V) **no se usa** para los módulos. El 5 V solo podría usarse en el lado de la señal externa (p. ej. LED del chasis del PC), nunca como `VCC` del lado que va a los GPIO.
+
+#### Distribución de alimentación 3.3 V
 
 ```
-Raspberry Pi                Optoacoplador           PC Motherboard
-GPIO17 (Pin 11) -----> LED+ (+)
-GND (Pin 6)     -----> LED- (-)
-                       Collector -----> Power Button +
-                       Emitter   -----> Power Button -
+Pin 1 (3.3V) ──┬──► Módulo #3 VCC (Power LED)
+               ├──► Módulo #4 VCC (HDD LED)
+               ├──► Módulo #5 VCC (Coin P1)
+               └──► Módulo #6 VCC (Coin P2)
+
+Módulos #1 y #2 (Power Button / Reset Button): VCC sin conectar ✅
 ```
 
-**Optoacoplador recomendado:** PC817, 4N35, o similar
+#### Tipo de optoacoplador y patillaje
+
+El módulo utilizado dispone de dos lados:
+
+- **Lado entrada (LED infrarrojo):** terminales `+` y `−`
+- **Lado salida (fototransistor):** terminales `GND`, `VCC` y `Output`
+
+#### Módulos de salida — Power Button y Reset Button (módulos #1 y #2)
+
+La Pi **activa** el optoacoplador para simular la pulsación del botón. El GPIO opera a **3.3 V**, suficiente para disparar el LED infrarrojo del optoacoplador con la resistencia limitadora de corriente incluida en el módulo (típicamente 470 Ω–1 kΩ, lo que da ~1.5–4 mA).
+
+```
+Raspberry Pi                 Optoacoplador            Placa base PC
+GPIO 17/18 (3.3V) ────────► +  [ LED IR ]  − ◄─── GND (pin 14)
+                                    │
+                             Output ──────────────► Power/Reset Button +
+                             GND    ──────────────► Power/Reset Button −
+                             VCC    (sin conectar)
+```
+
+> Los módulos #1 y #2 **no necesitan VCC externo** porque el fototransistor
+> actúa como simple interruptor entre Output y GND.
+
+#### Módulos de entrada — Power LED y HDD LED (módulos #3 y #4)
+
+El PC activa el optoacoplador a través del LED del chasis; la Pi lee el estado.
+`VCC` del módulo va a **3.3 V (Pin 1)** para que `Output` nunca supere los 3.3 V tolerados por el GPIO.
+
+```
+PC Chasis                    Optoacoplador            Raspberry Pi
+Power/HDD LED + ──────────► +  [ LED IR ]  − ◄─── Power/HDD LED −
+                                    │
+                             VCC  ◄──── Pin 1 (3.3V)  ← ⚠️ no usar 5V
+                             GND  ◄──── Pin 14 (GND)
+                             Output ───► GPIO 22/23 (pin 15/16)
+```
+
+La Pi configura GPIO 22 y GPIO 23 como entradas con **pull-down interno**.
+`Output = HIGH (3.3V)` → LED encendido (PC encendido / disco activo).
+
+#### Módulos de entrada — Coin P1 y Coin P2 (módulos #5 y #6)
+
+El microswitch del monedero activa el optoacoplador; la Pi detecta el flanco.
+`VCC` del módulo va a **3.3 V (Pin 1)** por el mismo motivo que los módulos LED.
+
+```
+Monedero                     Optoacoplador            Raspberry Pi
+Switch + ─────────────────► +  [ LED IR ]  − ◄─── GND (común)
+                                    │
+                             VCC  ◄──── Pin 1 (3.3V)  ← ⚠️ no usar 5V
+                             GND  ◄──── Pin 14 (GND)
+                             Output ───► GPIO 27/24 (pin 13/18)
+```
+
+La Pi configura GPIO 27 y GPIO 24 como entradas con **pull-down interno**.
+Cada flanco ascendente (`LOW → HIGH`) incrementa el contador de monedas correspondiente.
 
 ### Conexión Bluetooth
 

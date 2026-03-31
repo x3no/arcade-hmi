@@ -96,12 +96,12 @@ class GPIOController:
     # ── Inputs ───────────────────────────────────────────────────────────────
 
     def read_power_led(self):
-        """Return True when PC power LED is lit (optocoupler HIGH)."""
-        return bool(GPIO.input(PIN_POWER_LED))
+        """Return True when PC power LED is lit (optocoupler LOW = active)."""
+        return not bool(GPIO.input(PIN_POWER_LED))
 
     def read_hdd_led(self):
-        """Return True when HDD LED is active."""
-        return bool(GPIO.input(PIN_HDD_LED))
+        """Return True when HDD LED is active (optocoupler LOW = active)."""
+        return not bool(GPIO.input(PIN_HDD_LED))
 
     def read_coin1(self):
         """Return True while coin P1 optocoupler signal is HIGH."""
