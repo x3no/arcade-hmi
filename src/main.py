@@ -1981,6 +1981,8 @@ class ArcadeControlApp:
         _hold_last_t = 0   # last time a hold_action was fired
         HOLD_DELAY   = 3000  # ms before repeat starts
         HOLD_REPEAT  = 300   # ms between repeat fires
+        _fps_frames  = 0
+        _fps_t0      = pygame.time.get_ticks()
         while self.running:
             self.handle_events()
 
@@ -2017,6 +2019,15 @@ class ArcadeControlApp:
                 self.draw_main_screen()
 
             self.clock.tick(30)
+
+            # FPS counter — prints every 3 seconds
+            _fps_frames += 1
+            _fps_elapsed = pygame.time.get_ticks() - _fps_t0
+            if _fps_elapsed >= 3000:
+                print(f"FPS: {_fps_frames * 1000 / _fps_elapsed:.1f}  "
+                      f"scale={'SW' if self._scale_to_display else 'HW'}")
+                _fps_frames = 0
+                _fps_t0 = pygame.time.get_ticks()
             
         self.cleanup()
         
