@@ -1710,7 +1710,10 @@ class ArcadeControlApp:
         """Draw main control interface — skips render if nothing changed."""
         now_s    = datetime.now(ZoneInfo('Europe/Madrid')).second
         menu     = self._active_scroll_menu()
-        scrolling = menu.dragging or abs(menu.velocity) > 0.05
+        scrolling = (menu.dragging
+                     or abs(menu.velocity) > 0.05
+                     or menu.scroll_x < menu.min_scroll
+                     or menu.scroll_x > menu.max_scroll)
         if not (self._main_cache_dirty or scrolling or now_s != self._prev_second):
             return
         self._prev_second = now_s
