@@ -16,7 +16,7 @@ else
     # at (0,0) exactly filling that region — no CPU transform.scale needed.
     xinit /bin/bash -c "
         sleep 1
-        if xrandr --output HDMI-1 --scale-from 640x360 2>/dev/null; then
+        if xrandr --output HDMI-1 --rotate left --scale-from 640x360 2>/dev/null; then
             export ARCADE_HW_SCALE=1
         fi
         exec /usr/bin/python3 '$SCRIPT_DIR/src/main.py'
