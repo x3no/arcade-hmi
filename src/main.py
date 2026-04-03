@@ -30,11 +30,6 @@ IS_PI = platform.machine() in ('aarch64', 'armv7l', 'armv6l')
 os.environ['SDL_VIDEODRIVER'] = 'x11'
 if IS_PI:
     os.environ['SDL_NOMOUSE'] = '1'
-    # Do NOT override SDL_RENDER_DRIVER: opengles2 breaks pygame.SCALED on Pi
-    # (X11 + fkms — surface renders at 640x360 unscaled in center of screen).
-    # SDL2 defaults to software rendering here, which handles SCALED correctly
-    # and still benefits from the 9x reduced pixel count at RS=1/3.
-    # Enable VSync at the SDL2 renderer level to eliminate tearing
     os.environ.setdefault('SDL_RENDER_VSYNC', '1')
 
 # Color palette
