@@ -539,6 +539,8 @@ class ArcadeControlApp:
         self.lan_volume = 0
         self.lan_mute = False
         self.lan_game_status = None
+        self.lan_game_image_bytes = None  # Buffer crudo para convertir en thread principal
+        self.lan_game_image_surf = None   # Pygame surface de la captura en vivo
         
         self._start_bt_status_poller()
         self._start_wifi_poller()
@@ -1194,6 +1196,17 @@ class ArcadeControlApp:
                                 self.lan_game_status = new_game
                                 self.lan_connected = True
                                 self._main_cache_dirty = True
+                                
+                        # Si hay un juego, pedir la captura de pantalla en vivo
+                        if self.lan_game_status and self.lan_game_status != "Ningún juego en ejecución" and self.current_tab == 'partida':
+                            try:
+                                req_img = urllib.request.Request(f"http://{self.lan_pc_ip}:5000/game/preview", method="GET")
+                                with urllib.request.urlopen(req_img, timeout=2.0) as resp:
+                                    if resp.status == 200:
+                                        self.lan_game_image_bytes = resp.read()
+                                        self._main_cache_dirty = True
+                            except Exception:
+                                pass
 
                         _t.sleep(2)
                     except Exception:
@@ -1792,6 +1805,16 @@ class ArcadeControlApp:
         self._main_cache_dirty = False
 
     def draw_main_screen_base(self):
+        import io
+        # Procesar nueva captura en el hilo principal de Pygame
+        if self.lan_game_image_bytes and self.current_tab == 'partida':
+            try:
+                img = pygame.image.load(io.BytesIO(self.lan_game_image_bytes)).convert()
+                self.lan_game_image_surf = img
+            except Exception:
+                pass
+            self.lan_game_image_bytes = None
+
         # Rebuild tab/slot layer only when something structural changed
         if self._main_cache_dirty:
             self._rebuild_main_cache()
@@ -1849,6 +1872,24 @@ class ArcadeControlApp:
         if self.lan_game_status and self.lan_game_status != "None":
             game_surf = _rt(self.font_mono, f"JUGANDO: {self.lan_game_status}", (255, 165, 0))
             self.screen.blit(game_surf, game_surf.get_rect(center=(self.width // 2, BAR_BOT_CY)))
+
+        # Dibujar Live Preview si estamos en la tab "Partida" y tenemos imagen cacheada
+        if self.current_tab == 'partida' and self.lan_game_image_surf:
+            from pygame import transform
+            # Calcular altura disponible en el centro encima del menú inferior si cabe o usar tamaño fijo
+            iw, ih = self.lan_game_image_surf.get_size()
+            max_w, max_h = _s(280), _s(180)
+            scale = min(max_w / iw, max_h / ih)
+            if scale < 1.0:
+                img_scaled = transform.smoothscale(self.lan_game_image_surf, (int(iw * scale), int(ih * scale)))
+            else:
+                img_scaled = self.lan_game_image_surf
+
+            # Situarlo en la zona superior central (aprovechando espacio vacío cerca del header)
+            img_rect = img_scaled.get_rect(center=(self.width // 2, BAR_CY + _s(80)))
+            self.screen.blit(img_scaled, img_rect)
+            # Dibujar un borde Cyberpunk alrededor de la captura
+            pygame.draw.rect(self.screen, (255, 165, 0), img_rect, 2)
 
         # PC uptime — right (only while PC is on)
         if self.pc_on and self.pc_on_since is not None:
