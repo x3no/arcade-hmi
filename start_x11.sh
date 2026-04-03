@@ -18,7 +18,7 @@ else
     xinit /bin/bash -c "
         export DISPLAY=:0
         sleep 1
-        if xrandr --output HDMI-1 --scale 3x3; then
+        if xrandr --output HDMI-1 --scale-from 640x360 2>/dev/null; then
             export ARCADE_HW_SCALE=1
         else
             xrandr --output HDMI-1 --scale 1x1 2>/dev/null || true
