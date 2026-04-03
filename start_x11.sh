@@ -11,12 +11,14 @@ if [[ -n "$DISPLAY" ]]; then
     python3 "$SCRIPT_DIR/src/main.py"
 else
     # Console mode (Raspberry Pi).
-    # xrandr --scale-from 640x360 tells VC4/KMS to upscale to 1920x1080 in
-    # hardware — pygame renders at 640x360 with no CPU-side transform.scale.
-    # sleep 1: wait for X11 to detect the monitor before running xrandr.
+    # Try to use VC4 hardware scaler via xrandr --scale-from, so pygame renders
+    # at 640x360 and VC4 upscales to 1920x1080 for free (no CPU transform.scale).
+    # If xrandr succeeds, set ARCADE_HW_SCALE=1 so main.py renders direct.
     xinit /bin/bash -c "
         sleep 1
-        xrandr --output HDMI-1 --scale-from 640x360
+        if xrandr --output HDMI-1 --scale-from 640x360 2>/dev/null; then
+            export ARCADE_HW_SCALE=1
+        fi
         exec /usr/bin/python3 '$SCRIPT_DIR/src/main.py'
     " -- :0 vt1 -nocursor
 fi

@@ -395,11 +395,10 @@ class ArcadeControlApp:
         self.config = Config()
         
         # Screen setup
-        # On Pi: start_x11.sh sets xrandr --fb 640x360 so X11 reports a 640x360
-        # desktop. The VC4 HVS hardware scaler upscales to 1920x1080 for free.
-        # We render directly to the display surface — no CPU-side scale needed.
-        # Fallback: if X11 still reports 1920x1080 (xrandr --fb failed), we use
-        # the manual pygame.transform.scale path.
+        # On Pi: start_x11.sh tries xrandr --scale-from 640x360 (VC4 HW upscale).
+        # If it succeeds ARCADE_HW_SCALE=1 is exported and we render directly at
+        # 640x360 — no CPU transform.scale in the loop.
+        # Fallback: display reports 1920x1080 → manual SW scale each frame.
         _info = pygame.display.Info()
         if _info.current_w > 0 and _info.current_h > 0:
             disp_w, disp_h = _info.current_w, _info.current_h
@@ -407,22 +406,23 @@ class ArcadeControlApp:
             disp_w = self.config['screen_width']
             disp_h = self.config['screen_height']
 
-        # Desired render size
-        phys_w = self.config['screen_width']   # 1920 — used only for manual scale fallback
-        phys_h = self.config['screen_height']  # 1080
-        self.width  = int(phys_w * RS)         # 640
-        self.height = int(phys_h * RS)         # 360
+        phys_w = self.config['screen_width']
+        phys_h = self.config['screen_height']
+        self.width  = int(phys_w * RS)   # 640
+        self.height = int(phys_h * RS)   # 360
+
+        _hw_scale = os.environ.get('ARCADE_HW_SCALE') == '1'
 
         if IS_PI or _force_scale:
             flags = pygame.FULLSCREEN | pygame.DOUBLEBUF
-            # If xrandr --fb already shrank the desktop to 640x360, render direct
-            if disp_w == self.width and disp_h == self.height:
+            if _hw_scale:
+                # xrandr scaled the desktop to 640x360 virtual; render direct
                 self.screen = pygame.display.set_mode((self.width, self.height), flags, vsync=1)
                 self._display_surf   = self.screen
                 self._scale_to_display = False
-                print(f"Render: {self.width}x{self.height} via HW scaler (xrandr --fb)")
+                print(f"Render: {self.width}x{self.height} via VC4 HW scaler")
             else:
-                # Fallback: manual software scale
+                # SW scale fallback
                 self._display_surf = pygame.display.set_mode((disp_w, disp_h), flags, vsync=1)
                 self.screen = pygame.Surface((self.width, self.height)).convert()
                 self._scale_to_display = True
@@ -491,6 +491,8 @@ class ArcadeControlApp:
         self._main_cache_dirty = True
         # Idle-frame-skip: track last rendered second so we skip identical frames
         self._prev_second      = -1
+        # Lock screen: dirty on startup and whenever pin_input changes
+        self._lock_dirty       = True
 
         # State
         self.running = True
@@ -714,6 +716,7 @@ class ArcadeControlApp:
         else:
             if len(self.pin_input) < 6:
                 self.pin_input += key
+        self._lock_dirty = True
                 
     def unlock(self):
         """Unlock the interface"""
@@ -1637,7 +1640,10 @@ class ArcadeControlApp:
             btn.draw(self.screen, self.font_tab)
         
     def draw_lock_screen(self):
-        """Draw lock screen with numpad"""
+        """Draw lock screen — only redraws when pin_input changes."""
+        if not self._lock_dirty:
+            return
+        self._lock_dirty = False
         self.draw_lock_screen_base()
         self._present()
         
@@ -1738,7 +1744,7 @@ class ArcadeControlApp:
             return
         self._prev_second = now_s
         self.draw_main_screen_base()
-        self._present(fast=scrolling)
+        self._present()
 
     def open_debug(self):
         self.debug_screen = True
@@ -2031,18 +2037,11 @@ class ArcadeControlApp:
             
         self.cleanup()
         
-    def _present(self, fast=False):
-        """Upscale canvas to display surface and flip.
-        fast=True  → nearest-neighbour scale (scroll/drag: speed > quality)
-        fast=False → bilinear smoothscale   (idle: quality > speed)
-        """
+    def _present(self):
+        """Upscale canvas to display surface and flip (nearest-neighbour, fast)."""
         if self._scale_to_display:
-            if fast:
-                pygame.transform.scale(self.screen, (self._phys_w, self._phys_h),
-                                       self._display_surf)
-            else:
-                pygame.transform.smoothscale(self.screen, (self._phys_w, self._phys_h),
-                                             self._display_surf)
+            pygame.transform.scale(self.screen, (self._phys_w, self._phys_h),
+                                   self._display_surf)
         pygame.display.flip()
 
     def cleanup(self):
