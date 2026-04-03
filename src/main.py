@@ -37,7 +37,7 @@ if IS_PI:
     os.environ.setdefault('SDL_RENDER_VSYNC', '1')
 
 # Color palette
-C_BG     = (0, 0, 0)        # Pure black
+C_BG     = (180, 0, 120)     # DEBUG: bright magenta
 C_WHITE  = (255, 255, 255)  # White
 C_GRAY   = (140, 140, 140)  # Mid gray
 C_DARK   = (20, 20, 20)     # Near-black for fills
