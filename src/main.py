@@ -143,11 +143,26 @@ class TabButton:
         if self.style == 'box':
             if self.active:
                 pygame.draw.rect(surface, C_WHITE, self.rect)
-                text_surf = _rt(font, self.text, C_BG)
+                fg_color = C_BG
             else:
                 pygame.draw.rect(surface, C_GRAY, self.rect, max(1, _s(3)))
-                text_surf = _rt(font, self.text, C_GRAY)
-            surface.blit(text_surf, text_surf.get_rect(center=self.rect.center))
+                fg_color = C_GRAY
+                
+            if self.icon and font_icon:
+                icon_surf = _rt(font_icon, self.icon, fg_color)
+                if self.text:
+                    text_surf = _rt(font, self.text, fg_color)
+                    gap = _s(8)
+                    total_w = icon_surf.get_width() + gap + text_surf.get_width()
+                    x = self.rect.centerx - total_w // 2
+                    cy = self.rect.centery
+                    surface.blit(icon_surf, icon_surf.get_rect(left=x, centery=cy))
+                    surface.blit(text_surf, text_surf.get_rect(left=x + icon_surf.get_width() + gap, centery=cy))
+                else:
+                    surface.blit(icon_surf, icon_surf.get_rect(center=self.rect.center))
+            else:
+                text_surf = _rt(font, self.text, fg_color)
+                surface.blit(text_surf, text_surf.get_rect(center=self.rect.center))
             return
 
         # underline style
