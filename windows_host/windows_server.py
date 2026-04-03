@@ -74,6 +74,22 @@ def handle_vol():
 
 # --- 3. RETROARCH CONTROL & INFO ---
 def get_current_arcade_game():
+    # Intentar obtener el estado real desde la API UDP de RetroArch primero
+    status = query_retroarch_udp("GET_STATUS", timeout=0.05)
+    if status:
+        clean_status = status.replace("GET_STATUS ", "").strip()
+        status_parts = clean_status.split(" ", 1)
+        if len(status_parts) > 0 and status_parts[0].lower() == "playing":
+            game_name = "Unknown"
+            system_name = "Unknown"
+            if len(status_parts) > 1:
+                game_info = status_parts[1].split(",")
+                if len(game_info) >= 1:
+                    system_name = game_info[0].strip()
+                if len(game_info) >= 2:
+                    game_name = game_info[1].strip()
+            return {"is_game_running": True, "is_menu_running": False, "game": game_name, "system": system_name}
+
     EnumWindows = ctypes.windll.user32.EnumWindows
     GetWindowText = ctypes.windll.user32.GetWindowTextW
     GetWindowTextLength = ctypes.windll.user32.GetWindowTextLengthW
@@ -122,6 +138,8 @@ def get_retroarch_advanced_info():
         "core": None,
         "version": None,
         "status": None,
+        "system": None,
+        "game": None,
         "raw_window_title": None,
         "raw_retroarch_status": None,
         "raw_retroarch_version": None
@@ -151,22 +169,41 @@ def get_retroarch_advanced_info():
     EnumWindows(ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.POINTER(ctypes.c_int), ctypes.POINTER(ctypes.c_int))(foreach_window), 0)
 
     if info["running"]:
-        # Analizar el título (Suele ser: "Version - Core - Title")
+        # Analizar el título
         if info["raw_window_title"]:
-            partes = [p.strip() for p in info["raw_window_title"].split("-")]
-            if len(partes) >= 3:
-                info["version"] = partes[0]
-                info["core"] = partes[1]
-                info["title"] = " - ".join(partes[2:])
-            elif len(partes) == 2:
-                info["version"] = partes[0]
-                info["title"] = partes[1]
+            raw_title = info["raw_window_title"]
+            if "-" in raw_title:
+                partes = [p.strip() for p in raw_title.split("-")]
+                if len(partes) >= 3:
+                    info["version"] = partes[0]
+                    info["core"] = partes[1]
+                    info["title"] = " - ".join(partes[2:])
+                elif len(partes) == 2:
+                    if "RetroArch" in partes[0]:
+                        info["title"] = partes[1]
+                    else:
+                        info["version"] = partes[0]
+                        info["title"] = partes[1]
+            else:
+                info["title"] = raw_title.replace("RetroArch", "").strip() or raw_title
 
         # Consultar la API UDP nativa
         status = query_retroarch_udp("GET_STATUS")
         if status:
-            info["status"] = status.replace("GET_STATUS ", "").strip()
+            clean_status = status.replace("GET_STATUS ", "").strip()
             info["raw_retroarch_status"] = status
+            
+            # Extraer el nombre del juego del estado (ej: "PLAYING msx,Salamander,crc32=b9b17d6d")
+            status_parts = clean_status.split(" ", 1)
+            if len(status_parts) > 0:
+                info["status"] = status_parts[0].lower() # e.g. "playing"
+            if len(status_parts) > 1:
+                game_info = status_parts[1].split(",")
+                if len(game_info) >= 1:
+                    info["system"] = game_info[0].strip()
+                if len(game_info) >= 2:
+                    info["game"] = game_info[1].strip()
+                    info["title"] = game_info[1].strip() # Fallback for title
             
         version = query_retroarch_udp("VERSION")
         if version:
