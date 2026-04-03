@@ -715,32 +715,36 @@ class BTKeyboardServer:
     def send_key(self, modifier: int, key_code: int) -> bool:
         with self._lock:
             intr = self._intr
-        if intr is None:
-            log.debug('send_key: no host connected')
-            return False
-        try:
-            if key_code in _CONSUMER_KEYCODES:
-                # Consumer Control report (ID=2): 16-bit usage little-endian
-                usage = _CONSUMER_USAGE[key_code]
-                press   = bytes([HID_INPUT, REPORT_ID_CONSUMER,
-                                 usage & 0xFF, (usage >> 8) & 0xFF])
-                release = RELEASE_CONSUMER
-                log.info(f'TX Consumer key={key_code:#04x} usage={usage:#06x}')
-            else:
-                # Standard keyboard report (ID=1)
-                press   = bytes([HID_INPUT, REPORT_ID_KEYBOARD,
-                                 modifier, 0, key_code, 0, 0, 0, 0, 0])
-                release = RELEASE_KEYBOARD
-                log.info(f'TX Keyboard modifier={modifier:#04x} key={key_code:#04x}')
-            intr.send(press)
-            intr.send(release)
-            return True
-        except OSError as e:
-            log.warning(f'send_key failed: {e}')
-            with self._lock:
+            if intr is None:
+                log.debug('send_key: no host connected')
+                return False
+            try:
+                if key_code in _CONSUMER_KEYCODES:
+                    # Consumer Control report (ID=2): 16-bit usage little-endian
+                    usage = _CONSUMER_USAGE[key_code]
+                    press   = bytes([HID_INPUT, REPORT_ID_CONSUMER,
+                                     usage & 0xFF, (usage >> 8) & 0xFF])
+                    release = RELEASE_CONSUMER
+                    log.info(f'TX Consumer key={key_code:#04x} usage={usage:#06x}')
+                else:
+                    # Standard keyboard report (ID=1)
+                    press   = bytes([HID_INPUT, REPORT_ID_KEYBOARD,
+                                     modifier, 0, key_code, 0, 0, 0, 0, 0])
+                    release = RELEASE_KEYBOARD
+                    log.info(f'TX Keyboard modifier={modifier:#04x} key={key_code:#04x}')
+                
+                # Serialized sending over L2CAP socket with short delays
+                # to ensure host can differentiate press and release events clearly
+                intr.send(press)
+                time.sleep(0.015)
+                intr.send(release)
+                time.sleep(0.010)
+                return True
+            except OSError as e:
+                log.warning(f'send_key failed: {e}')
                 self._intr = None
                 self._ctrl = None
-            return False
+                return False
 
     # ── Unix socket command server ────────────────────────────────────────────
 
