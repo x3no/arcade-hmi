@@ -243,6 +243,9 @@ class ScrollMenu:
             btn.rect.height,
         )
 
+    # Maximum pixels the content can be pulled beyond its limits (hard wall)
+    MAX_OVERSCROLL = _s(120)
+
     def update(self):
         if self.dragging:
             return
@@ -251,11 +254,21 @@ class ScrollMenu:
         self.velocity  *= self.FRICTION
 
         if self.scroll_x < self.min_scroll:
+            # Kill velocity if it keeps pushing further out (wrong direction)
+            if self.velocity < 0:
+                self.velocity = 0.0
+            # Hard wall: never go more than MAX_OVERSCROLL past the boundary
+            self.scroll_x = max(self.scroll_x, self.min_scroll - self.MAX_OVERSCROLL)
+            # Spring pulls back toward the limit
             self.scroll_x += (self.min_scroll - self.scroll_x) * self.SPRING
-            self.velocity  *= 0.7
         elif self.scroll_x > self.max_scroll:
+            # Kill velocity if it keeps pushing further out (wrong direction)
+            if self.velocity > 0:
+                self.velocity = 0.0
+            # Hard wall
+            self.scroll_x = min(self.scroll_x, self.max_scroll + self.MAX_OVERSCROLL)
+            # Spring pulls back toward the limit
             self.scroll_x += (self.max_scroll - self.scroll_x) * self.SPRING
-            self.velocity  *= 0.7
 
         if abs(self.velocity) < 0.05:
             self.velocity = 0.0
