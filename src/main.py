@@ -202,11 +202,11 @@ class ScrollMenu:
     Each button's rect is stored as a content-relative position (x from 0).
     """
 
-    FRICTION       = 0.88   # velocity multiplier per frame (1.0 = no decay, 0 = instant stop)
-    SPRING         = 0.18   # overscroll snap-back per frame (lower = smoother bounce)
+    FRICTION       = 0.80   # Stronger friction to stop quickly without slippery floatiness
+    SPRING         = 0.25   # Snappier overscroll snap-back
     # Drag threshold scales with render resolution so the physical finger
     # movement needed to trigger a scroll is constant regardless of RS.
-    DRAG_THRESHOLD = max(4, int(25 * RS))
+    DRAG_THRESHOLD = max(2, int(15 * RS))
 
     def __init__(self, rect, buttons, btn_w, btn_gap):
         self.rect    = pygame.Rect(rect)
@@ -320,7 +320,8 @@ class ScrollMenu:
 
             now = pygame.time.get_ticks()
             dt  = max(1, now - self.drag_last_t)
-            self.velocity    = -(event.pos[0] - self.drag_last_x) / dt * (1000 / 30)
+            # Rebalance velocity for 60fps mapping avoiding artificial huge throws
+            self.velocity    = -(event.pos[0] - self.drag_last_x) / dt * (1000 / 60)
             self.drag_last_x = event.pos[0]
             self.drag_last_t = now
 
@@ -338,11 +339,8 @@ class ScrollMenu:
             if not self.dragging:
                 return False
             self.dragging = False
-            # Keep velocity so inertia carries through after finger lift,
-            # but reduce to 1/4 so it feels light, not heavy.
-            # Do NOT clamp overscroll here — let update()'s spring ease it back
-            # smoothly so the bounce animation plays out.
-            self.velocity *= 0.25
+            # Instantly stop scrolling instead of floating away loosely
+            self.velocity *= 0.05
             if not self.is_scroll and self.pressed_btn:
                 self.pressed_btn.is_pressed = False
                 if self.pressed_btn.action and not self.pressed_btn._hold_fired:
