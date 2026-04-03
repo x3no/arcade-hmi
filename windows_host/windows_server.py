@@ -15,6 +15,8 @@ from pycaw.pycaw import AudioUtilities, IAudioEndpointVolume
 
 app = Flask(__name__)
 
+import comtypes
+
 # --- 1. UDP DISCOVERY ---
 def udp_server():
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -29,6 +31,7 @@ def udp_server():
 
 # --- 2. AUDIO CONTROL ---
 def get_audio_volume():
+    comtypes.CoInitialize()
     devices = AudioUtilities.GetSpeakers()
     interface = devices.Activate(IAudioEndpointVolume._iid_, CLSCTX_ALL, None)
     return cast(interface, POINTER(IAudioEndpointVolume))
