@@ -11,12 +11,12 @@ if [[ -n "$DISPLAY" ]]; then
     python3 "$SCRIPT_DIR/src/main.py"
 else
     # Console mode (Raspberry Pi).
-    # Combine --fb (shrinks X11 virtual framebuffer to 640x360) with
-    # --scale-from (VC4 upscales that 640x360 to 1920x1080 in hardware).
-    # Result: pygame sees a 640x360 desktop and renders direct — no CPU scale.
+    # --scale-from 640x360: VC4 maps the top-left 640x360 of the virtual
+    # framebuffer to 1920x1080 in hardware. The app opens a borderless window
+    # at (0,0) exactly filling that region — no CPU transform.scale needed.
     xinit /bin/bash -c "
         sleep 1
-        if xrandr --fb 640x360 --output HDMI-1 --scale-from 640x360 2>/dev/null; then
+        if xrandr --output HDMI-1 --scale-from 640x360 2>/dev/null; then
             export ARCADE_HW_SCALE=1
         fi
         exec /usr/bin/python3 '$SCRIPT_DIR/src/main.py'
