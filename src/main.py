@@ -38,7 +38,7 @@ if IS_PI:
     os.environ.setdefault('SDL_RENDER_VSYNC', '1')
 
 # Color palette
-C_BG     = (180, 0, 120)     # DEBUG: bright magenta
+C_BG     = (0, 0, 0)        # Pure black
 C_WHITE  = (255, 255, 255)  # White
 C_GRAY   = (140, 140, 140)  # Mid gray
 C_DARK   = (20, 20, 20)     # Near-black for fills
@@ -414,7 +414,6 @@ class ArcadeControlApp:
             self._scale_to_display = False
         self._phys_w = phys_w
         self._phys_h = phys_h
-        print(f"Display created: display={self._display_surf.get_size()}  canvas={self.screen.get_size()}")
         pygame.display.set_caption("Arcade Control")
 
         # Helper: scale a design font-size to the render resolution
@@ -1892,6 +1891,12 @@ class ArcadeControlApp:
                 elif event.key == K_F1:
                     self.do_update()
             elif event.type in (MOUSEBUTTONDOWN, MOUSEMOTION, MOUSEBUTTONUP):
+                # Scale touch/mouse coordinates from physical display space to canvas space
+                if self._scale_to_display:
+                    sx = event.pos[0] * self.width  // self._phys_w
+                    sy = event.pos[1] * self.height // self._phys_h
+                    event = event.__class__(event.type,
+                                           dict(event.__dict__, pos=(sx, sy)))
                 # If dialog is open, fire action immediately on MOUSEBUTTONDOWN
                 if self.confirmation_dialog:
                     if event.type == MOUSEBUTTONDOWN and hasattr(self, 'dialog_yes_btn'):
