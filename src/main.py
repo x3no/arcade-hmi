@@ -1996,7 +1996,7 @@ class ArcadeControlApp:
         """Upscale canvas to display surface and flip."""
         if self._scale_to_display:
             pygame.transform.scale(self.screen, (self._phys_w, self._phys_h), self._display_surf)
-        self._present()
+        pygame.display.flip()
 
     def cleanup(self):
         """Cleanup resources"""
