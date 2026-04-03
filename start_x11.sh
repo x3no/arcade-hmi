@@ -11,10 +11,11 @@ if [[ -n "$DISPLAY" ]]; then
     python3 "$SCRIPT_DIR/src/main.py"
 else
     # Console mode (Raspberry Pi).
-    # Set X11 virtual framebuffer to 640x360 so the VC4 hardware scaler
-    # upscales to 1920x1080 for free — no CPU-side transform.scale needed.
+    # --scale-from 640x360 tells X11/VC4 to present a 640x360 virtual screen
+    # and scale it up to 1920x1080 in hardware (VideoCore HVS) — free upscale.
     xinit /bin/bash -c "
-        xrandr --fb 640x360 2>/dev/null || true
+        xrandr --output HDMI-A-1 --scale-from 640x360 2>/dev/null || \
+        xrandr --output HDMI-1   --scale-from 640x360 2>/dev/null || true
         exec /usr/bin/python3 '$SCRIPT_DIR/src/main.py'
     " -- :0 vt1 -nocursor
 fi
