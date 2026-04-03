@@ -534,9 +534,16 @@ class ArcadeControlApp:
         self.coin_p1_count = 0
         self.coin_p2_count = 0
         self.weather_data = None    # {'temp': float, 'condition': str}
+        self.lan_pc_ip = None       # Stores PC IP if found via UDP broadcast
+        self.lan_connected = False
+        self.lan_volume = 0
+        self.lan_mute = False
+        self.lan_game_status = None
+        
         self._start_bt_status_poller()
         self._start_wifi_poller()
         self._start_weather_poller()
+        self._start_lan_poller()
         self.current_tab  = 'sistema'
         self.current_slot = 0  # 0 = general, 1-9 = save slots
 
@@ -771,6 +778,7 @@ class ArcadeControlApp:
     # HID Actions
     def volume_up(self):
         """Increase volume"""
+        if self._lan_send_action('up'): return
         try:
             with USBHID(self.config['hid_device']) as hid:
                 hid.send_key(ArcadeKeyMapper.get_key('volume_up'))
@@ -779,6 +787,7 @@ class ArcadeControlApp:
             
     def volume_down(self):
         """Decrease volume"""
+        if self._lan_send_action('down'): return
         try:
             with USBHID(self.config['hid_device']) as hid:
                 hid.send_key(ArcadeKeyMapper.get_key('volume_down'))
@@ -787,6 +796,7 @@ class ArcadeControlApp:
             
     def mute(self):
         """Toggle mute"""
+        if self._lan_send_action('mute'): return
         try:
             with USBHID(self.config['hid_device']) as hid:
                 hid.send_key(ArcadeKeyMapper.get_key('mute'))
@@ -815,8 +825,21 @@ class ArcadeControlApp:
         KeyCode.KEY_7, KeyCode.KEY_8, KeyCode.KEY_9,
     ]
 
+    def _lan_send_retroarch(self, cmd):
+        """Send command to RetroArch via PC Server."""
+        if not self.lan_pc_ip: return False
+        import json, urllib.request
+        try:
+            data = json.dumps({'command': cmd}).encode('utf-8')
+            req = urllib.request.Request(f"http://{self.lan_pc_ip}:5000/retroarch", data=data, headers={'Content-Type': 'application/json'}, method='POST')
+            with urllib.request.urlopen(req, timeout=1.0) as resp:
+                return json.loads(resp.read().decode()).get('status') == 'ok'
+        except Exception:
+            return False
+
     def save_state(self):
         """RetroArch: navigate to slot (F6/F7) then F2 = save state"""
+        if self._lan_send_retroarch('SAVE_STATE'): return
         try:
             slot = self.current_slot  # 1-9
             with USBHID(self.config['hid_device']) as hid:
@@ -832,6 +855,7 @@ class ArcadeControlApp:
 
     def load_state(self):
         """RetroArch: navigate to slot (F6/F7) then F4 = load state"""
+        if self._lan_send_retroarch('LOAD_STATE'): return
         try:
             slot = self.current_slot  # 1-9
             with USBHID(self.config['hid_device']) as hid:
@@ -845,6 +869,7 @@ class ArcadeControlApp:
 
     def pause_game(self):
         """RetroArch: P = pause toggle"""
+        if self._lan_send_retroarch('PAUSE_TOGGLE'): return
         try:
             with USBHID(self.config['hid_device']) as hid:
                 hid.send_key(KeyCode.KEY_P)
@@ -861,6 +886,7 @@ class ArcadeControlApp:
 
     def fast_forward(self):
         """RetroArch: Space = fast-forward toggle"""
+        if self._lan_send_retroarch('FAST_FORWARD'): return
         try:
             with USBHID(self.config['hid_device']) as hid:
                 hid.send_key(KeyCode.KEY_SPACE)
@@ -869,6 +895,7 @@ class ArcadeControlApp:
 
     def screenshot(self):
         """RetroArch: F8 = screenshot"""
+        if self._lan_send_retroarch('SCREENSHOT'): return
         try:
             with USBHID(self.config['hid_device']) as hid:
                 hid.send_key(KeyCode.KEY_F8)
@@ -877,6 +904,7 @@ class ArcadeControlApp:
 
     def mame_menu(self):
         """RetroArch: F1 = menu toggle"""
+        if self._lan_send_retroarch('MENU_TOGGLE'): return
         try:
             with USBHID(self.config['hid_device']) as hid:
                 hid.send_key(KeyCode.KEY_F1)
@@ -885,6 +913,7 @@ class ArcadeControlApp:
 
     def restart_game(self):
         """RetroArch: H = reset content"""
+        if self._lan_send_retroarch('RESET'): return
         try:
             with USBHID(self.config['hid_device']) as hid:
                 hid.send_key(KeyCode.KEY_H)
@@ -893,6 +922,7 @@ class ArcadeControlApp:
 
     def exit_game(self):
         """RetroArch: ESC = quit"""
+        if self._lan_send_retroarch('QUIT'): return
         try:
             with USBHID(self.config['hid_device']) as hid:
                 hid.send_key(KeyCode.KEY_ESC)
@@ -1117,6 +1147,79 @@ class ArcadeControlApp:
                 _t.sleep(30)
         t = threading.Thread(target=_poll, daemon=True)
         t.start()
+
+    def _start_lan_poller(self):
+        """Background thread: UDP Broadcast to find PC and poll volume status."""
+        import threading
+        def _poll():
+            import time as _t, socket, json, urllib.request
+            while True:
+                if not self.lan_pc_ip:
+                    # UDP Broadcast
+                    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+                    s.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+                    s.settimeout(2.0)
+                    try:
+                        s.sendto(b"ARCADE_DISCOVER", ("255.255.255.255", 50019))
+                        data, addr = s.recvfrom(1024)
+                        if data == b"ARCADE_PC_HERE":
+                            self.lan_pc_ip = addr[0]
+                            self.lan_connected = True
+                            self._main_cache_dirty = True
+                    except Exception:
+                        self.lan_connected = False
+                        self._main_cache_dirty = True
+                    finally:
+                        s.close()
+                    _t.sleep(5)
+                else:
+                    # HTTP polling for volume and game
+                    try:
+                        req_vol = urllib.request.Request(f"http://{self.lan_pc_ip}:5000/vol", method="GET")
+                        with urllib.request.urlopen(req_vol, timeout=2.0) as resp:
+                            data = json.loads(resp.read().decode())
+                            if self.lan_volume != data.get('volume') or self.lan_mute != data.get('mute'):
+                                self.lan_volume = data.get('volume', 0)
+                                self.lan_mute = data.get('mute', False)
+                                self.lan_connected = True
+                                self._main_cache_dirty = True
+                                
+                        req_game = urllib.request.Request(f"http://{self.lan_pc_ip}:5000/game", method="GET")
+                        with urllib.request.urlopen(req_game, timeout=2.0) as resp:
+                            data = json.loads(resp.read().decode())
+                            new_game = data.get('game')
+                            if new_game and len(new_game) > 30:
+                                new_game = new_game[:27] + "..."
+                            if self.lan_game_status != new_game:
+                                self.lan_game_status = new_game
+                                self.lan_connected = True
+                                self._main_cache_dirty = True
+
+                        _t.sleep(2)
+                    except Exception:
+                        self.lan_pc_ip = None
+                        self.lan_connected = False
+                        self.lan_game_status = None
+                        self._main_cache_dirty = True
+                        _t.sleep(5)
+        t = threading.Thread(target=_poll, daemon=True)
+        t.start()
+
+    def _lan_send_action(self, action):
+        """Send volume change to PC via LAN."""
+        if not self.lan_pc_ip: return False
+        import json, urllib.request
+        try:
+            data = json.dumps({'action': action}).encode('utf-8')
+            req = urllib.request.Request(f"http://{self.lan_pc_ip}:5000/vol", data=data, headers={'Content-Type': 'application/json'}, method='POST')
+            with urllib.request.urlopen(req, timeout=1.0) as resp:
+                res = json.loads(resp.read().decode())
+                self.lan_volume = res.get('volume', self.lan_volume)
+                self.lan_mute = res.get('mute', self.lan_mute)
+                self._main_cache_dirty = True
+            return True
+        except Exception:
+            return False
 
     def _start_weather_poller(self):
         """Background thread: fetch weather for Cervelló (BCN) every 10 min."""
@@ -1717,10 +1820,11 @@ class ArcadeControlApp:
             wx_surf = _rt(self.font_mono, wx_str, (180, 210, 255))
             self.screen.blit(wx_surf, wx_surf.get_rect(midleft=(clock_rect.right + _s(22), BAR_CY)))
 
-        # Right-side indicators (rendered right→left: BT, HDD, PC, WiFi)
+        # Right-side indicators (rendered right→left: BT, HDD, PC, WiFi, LAN)
         DOT_R = _s(7)
         x = self.width - MARGIN
         for label, connected in [('BT',   self.bt_connected),
+                                   ('LAN',  self.lan_connected),
                                    ('HDD',  self.hdd_on),
                                    ('PC',   self.pc_on),
                                    ('WiFi', self.wifi_connected)]:
@@ -1740,6 +1844,12 @@ class ArcadeControlApp:
         coin_str  = f'P1: {self.coin_p1_count}   P2: {self.coin_p2_count}'
         coin_surf = _rt(self.font_mono, coin_str, C_GRAY)
         self.screen.blit(coin_surf, coin_surf.get_rect(midleft=(MARGIN, BAR_BOT_CY)))
+
+        # Current Game - center (only if known via LAN)
+        if self.lan_game_status and self.lan_game_status != "None":
+            game_surf = _rt(self.font_mono, f"JUGANDO: {self.lan_game_status}", (255, 165, 0))
+            self.screen.blit(game_surf, game_surf.get_rect(center=(self.width // 2, BAR_BOT_CY)))
+
         # PC uptime — right (only while PC is on)
         if self.pc_on and self.pc_on_since is not None:
             elapsed = int(time.time() - self.pc_on_since)
