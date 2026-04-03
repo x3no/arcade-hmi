@@ -415,12 +415,13 @@ class ArcadeControlApp:
 
         if IS_PI or _force_scale:
             if _hw_scale:
-                # xrandr --scale-from 640x360 maps the top-left 640x360 of the
-                # virtual FB to the full 1920x1080 physical screen.
-                # Use FULLSCREEN so SDL raises/maps the window properly.
+                # xrandr --scale-from maps top-left 640x360 of the virtual FB to
+                # 1920x1080 on hardware. Open a borderless window at (0,0) exactly
+                # filling that region — SDL2 renders direct, no CPU scale.
+                os.environ['SDL_VIDEO_WINDOW_POS'] = '0,0'
                 self.screen = pygame.display.set_mode(
                     (self.width, self.height),
-                    pygame.FULLSCREEN | pygame.DOUBLEBUF,
+                    pygame.NOFRAME | pygame.DOUBLEBUF,
                     vsync=1
                 )
                 self._display_surf   = self.screen
