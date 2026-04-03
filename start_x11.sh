@@ -10,15 +10,8 @@ if [[ -n "$DISPLAY" ]]; then
     echo "Desktop mode: running directly"
     python3 "$SCRIPT_DIR/src/main.py"
 else
-    # Console mode (Raspberry Pi).
-    # --scale-from 640x360: VC4 maps the top-left 640x360 of the virtual
-    # framebuffer to 1920x1080 in hardware. The app opens a borderless window
-    # at (0,0) exactly filling that region — no CPU transform.scale needed.
-    xinit /bin/bash -c "
-        sleep 1
-        if xrandr --output HDMI-1 --scale-from 640x360 2>/dev/null; then
-            export ARCADE_HW_SCALE=1
-        fi
-        exec /usr/bin/python3 '$SCRIPT_DIR/src/main.py'
-    " -- :0 vt1 -nocursor
+    # Console mode (Raspberry Pi) - start X server.
+    # pygame renders at 640x360 (RS=1/3) and scales to 1920x1080 via
+    # pygame.transform.scale each frame (SW, fast nearest-neighbour).
+    xinit /usr/bin/python3 "$SCRIPT_DIR/src/main.py" -- :0 vt1 -nocursor
 fi
