@@ -317,14 +317,9 @@ class ScrollMenu:
             self.dragging = False
             # Keep velocity so inertia carries through after finger lift,
             # but reduce to 1/4 so it feels light, not heavy.
+            # Do NOT clamp overscroll here — let update()'s spring ease it back
+            # smoothly so the bounce animation plays out.
             self.velocity *= 0.25
-            # Clamp overscroll boundaries (spring in update() will ease back).
-            if self.scroll_x < self.min_scroll:
-                self.scroll_x = self.min_scroll
-                self.velocity = 0.0
-            elif self.scroll_x > self.max_scroll:
-                self.scroll_x = self.max_scroll
-                self.velocity = 0.0
             if not self.is_scroll and self.pressed_btn:
                 self.pressed_btn.is_pressed = False
                 if self.pressed_btn.action and not self.pressed_btn._hold_fired:
