@@ -54,7 +54,7 @@ C_DISABLED_TEXT = (70, 70, 70)
 # 1920/3 = 640, 1080/3 = 360: perfect integer scaling, no sub-pixel blur.
 # Set ARCADE_FORCE_SCALE=1 in the environment to test scaled mode on a desktop.
 _force_scale = os.environ.get('ARCADE_FORCE_SCALE') == '1'
-RS = 1/3 if (IS_PI or _force_scale) else 1.0   # render-to-native scale factor
+RS = 1/4 if (IS_PI or _force_scale) else 1.0   # render-to-native scale factor
 
 
 def _s(v):
