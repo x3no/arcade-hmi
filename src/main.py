@@ -30,10 +30,9 @@ IS_PI = platform.machine() in ('aarch64', 'armv7l', 'armv6l')
 os.environ['SDL_VIDEODRIVER'] = 'x11'
 if IS_PI:
     os.environ['SDL_NOMOUSE'] = '1'
-    # Request hardware-accelerated renderer so pygame.SCALED upscales via GPU
-    os.environ.setdefault('SDL_RENDER_DRIVER', 'opengl')
-    # Enable VSync at the SDL2 renderer level to eliminate tearing
-    os.environ.setdefault('SDL_RENDER_VSYNC', '1')
+    # Pi Zero 2W has VideoCore IV which supports OpenGL ES 1.1/2.0 only.
+    # Using 'opengles2' lets SDL2 use the GPU; 'opengl' falls back to software.
+    os.environ.setdefault('SDL_RENDER_DRIVER', 'opengles2')
     # Enable VSync at the SDL2 renderer level to eliminate tearing
     os.environ.setdefault('SDL_RENDER_VSYNC', '1')
 
@@ -389,8 +388,14 @@ class ArcadeControlApp:
         # Screen setup
         # On Pi: render at one-third native resolution; SDL2 SCALED + GPU upscales 3×.
         # DOUBLEBUF + vsync=1 eliminates tearing.
-        phys_w = self.config['screen_width']
-        phys_h = self.config['screen_height']
+        # Auto-detect actual screen resolution so scaling is always correct regardless
+        # of what resolution the monitor negotiated over HDMI.
+        _info = pygame.display.Info()
+        if _info.current_w > 0 and _info.current_h > 0:
+            phys_w, phys_h = _info.current_w, _info.current_h
+        else:
+            phys_w = self.config['screen_width']
+            phys_h = self.config['screen_height']
         self.width  = int(phys_w * RS)
         self.height = int(phys_h * RS)
         print(f"Render: {self.width}x{self.height}  native: {phys_w}x{phys_h}  RS={RS}")
@@ -455,6 +460,8 @@ class ArcadeControlApp:
         # Static-UI render cache: rebuilt only when tabs/buttons change state
         self._main_cache       = None
         self._main_cache_dirty = True
+        # Idle-frame-skip: track last rendered second so we skip identical frames
+        self._prev_second      = -1
 
         # State
         self.running = True
@@ -1608,7 +1615,7 @@ class ArcadeControlApp:
     def _rebuild_main_cache(self):
         """Pre-render tab bar and slot sub-tabs into a Surface (NOT the scroll area)."""
         if self._main_cache is None:
-            self._main_cache = pygame.Surface((self.width, self.height))
+            self._main_cache = pygame.Surface((self.width, self.height)).convert()
         s = self._main_cache
         s.fill(C_BG)
 
@@ -1691,7 +1698,13 @@ class ArcadeControlApp:
             self.screen.blit(up_surf, up_surf.get_rect(midright=(self.width - MARGIN, BAR_BOT_CY)))
 
     def draw_main_screen(self):
-        """Draw main control interface"""
+        """Draw main control interface — skips render if nothing changed."""
+        now_s    = datetime.now(ZoneInfo('Europe/Madrid')).second
+        menu     = self._active_scroll_menu()
+        scrolling = abs(menu.velocity) > 0.05
+        if not (self._main_cache_dirty or scrolling or now_s != self._prev_second):
+            return
+        self._prev_second = now_s
         self.draw_main_screen_base()
         pygame.display.flip()
 

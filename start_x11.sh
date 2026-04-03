@@ -10,6 +10,14 @@ if [[ -n "$DISPLAY" ]]; then
     echo "Desktop mode: running directly"
     python3 "$SCRIPT_DIR/src/main.py"
 else
-    # Console mode (Raspberry Pi) - start X server with 180° rotation
-    xinit /bin/bash -c "xrandr --output HDMI-1 --rotate inverted 2>/dev/null || xrandr --output HDMI-A-1 --rotate inverted 2>/dev/null || true; exec /usr/bin/python3 '$SCRIPT_DIR/src/main.py'" -- :0 vt1 -nocursor
+    # Console mode (Raspberry Pi) - start X server, force 1080p, 180° rotation
+    xinit /bin/bash -c "
+        xrandr --output HDMI-1 --mode 1920x1080 --rate 60 --rotate inverted 2>/dev/null || \
+        xrandr --output HDMI-A-1 --mode 1920x1080 --rate 60 --rotate inverted 2>/dev/null || \
+        xrandr --output HDMI-1 --mode 1920x1080 --rotate inverted 2>/dev/null || \
+        xrandr --output HDMI-A-1 --mode 1920x1080 --rotate inverted 2>/dev/null || \
+        xrandr --output HDMI-1 --rotate inverted 2>/dev/null || \
+        xrandr --output HDMI-A-1 --rotate inverted 2>/dev/null || true
+        exec /usr/bin/python3 '$SCRIPT_DIR/src/main.py'
+    " -- :0 vt1 -nocursor
 fi
