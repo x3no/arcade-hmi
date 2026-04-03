@@ -122,7 +122,9 @@ def get_retroarch_advanced_info():
         "core": None,
         "version": None,
         "status": None,
-        "raw_window_title": None
+        "raw_window_title": None,
+        "raw_retroarch_status": None,
+        "raw_retroarch_version": None
     }
     
     EnumWindows = ctypes.windll.user32.EnumWindows
@@ -155,18 +157,21 @@ def get_retroarch_advanced_info():
             if len(partes) >= 3:
                 info["version"] = partes[0]
                 info["core"] = partes[1]
-                info["title"] = partes[-1]
+                info["title"] = " - ".join(partes[2:])
             elif len(partes) == 2:
-                info["title"] = partes[-1]
+                info["version"] = partes[0]
+                info["title"] = partes[1]
 
         # Consultar la API UDP nativa
         status = query_retroarch_udp("GET_STATUS")
         if status:
             info["status"] = status.replace("GET_STATUS ", "").strip()
+            info["raw_retroarch_status"] = status
             
         version = query_retroarch_udp("VERSION")
         if version:
             info["version"] = version
+            info["raw_retroarch_version"] = version
 
     return info
 
