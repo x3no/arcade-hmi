@@ -693,6 +693,7 @@ class ArcadeControlApp:
         self.lan_is_game_running = False
         self.lan_is_menu_running = False
         self.lan_game_title = None
+        self.lan_game_system = None
         self.lan_game_image_bytes = None  # Buffer crudo para convertir en thread principal
         self.lan_game_image_surf = None   # Pygame surface de la captura en vivo
         
@@ -1476,16 +1477,19 @@ class ArcadeControlApp:
                             new_running = data.get('is_game_running', False)
                             new_menu = data.get('is_menu_running', False)
                             new_title = data.get('game')
+                            new_system = data.get('system')
                             
                             if new_title and len(new_title) > 30:
                                 new_title = new_title[:27] + "..."
                                 
                             if (self.lan_is_game_running != new_running or 
                                 self.lan_is_menu_running != new_menu or 
-                                self.lan_game_title != new_title):
+                                self.lan_game_title != new_title or
+                                getattr(self, "lan_game_system", None) != new_system):
                                 self.lan_is_game_running = new_running
                                 self.lan_is_menu_running = new_menu
                                 self.lan_game_title = new_title
+                                self.lan_game_system = new_system
                                 self.lan_connected = True
                                 self._main_cache_dirty = True
                                 
@@ -1511,6 +1515,7 @@ class ArcadeControlApp:
                             self.lan_is_game_running = False
                             self.lan_is_menu_running = False
                             self.lan_game_title = None
+                            self.lan_game_system = None
                             self._main_cache_dirty = True
                             _consecutive_fails = 0
                         _t.sleep(2)
@@ -2187,7 +2192,11 @@ class ArcadeControlApp:
 
         # Current Game - center (only if known via LAN)
         if self.lan_is_game_running and self.lan_game_title:
-            game_surf = _rt(self.font_mono, f"JUGANDO: {self.lan_game_title}", (255, 165, 0))
+            if getattr(self, "lan_game_system", None):
+                game_text = f"JUGANDO: [{self.lan_game_system.upper()}] {self.lan_game_title}"
+            else:
+                game_text = f"JUGANDO: {self.lan_game_title}"
+            game_surf = _rt(self.font_mono, game_text, (255, 165, 0))
             self.screen.blit(game_surf, game_surf.get_rect(center=(self.width // 2, BAR_BOT_CY)))
         elif self.lan_is_menu_running:
             game_surf = _rt(self.font_mono, "NAVEGANDO EN MENÚ", (0, 210, 100))
