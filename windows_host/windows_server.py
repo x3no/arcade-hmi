@@ -33,8 +33,15 @@ def udp_server():
 def get_audio_volume():
     comtypes.CoInitialize()
     devices = AudioUtilities.GetSpeakers()
-    interface = devices.Activate(IAudioEndpointVolume._iid_, CLSCTX_ALL, None)
-    return cast(interface, POINTER(IAudioEndpointVolume))
+    
+    # Dependiendo de la versión de pycaw, puede devolver un wrapper AudioDevice o el COM interface directo
+    if hasattr(devices, 'EndpointVolume'):
+        # Pycaw moderno devuelve un wrapper object
+        return devices.EndpointVolume
+    else:
+        # Pycaw clasico devuelve directamente el puntero IMMDevice
+        interface = devices.Activate(IAudioEndpointVolume._iid_, CLSCTX_ALL, None)
+        return cast(interface, POINTER(IAudioEndpointVolume))
 
 @app.route('/vol', methods=['GET', 'POST'])
 def handle_vol():
