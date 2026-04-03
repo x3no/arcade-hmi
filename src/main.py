@@ -30,6 +30,12 @@ IS_PI = platform.machine() in ('aarch64', 'armv7l', 'armv6l')
 os.environ['SDL_VIDEODRIVER'] = 'x11'
 if IS_PI:
     os.environ['SDL_NOMOUSE'] = '1'
+    # Request hardware-accelerated renderer so pygame.SCALED upscales via GPU
+    os.environ.setdefault('SDL_RENDER_DRIVER', 'opengl')
+    # Enable VSync at the SDL2 renderer level to eliminate tearing
+    os.environ.setdefault('SDL_RENDER_VSYNC', '1')
+    # Enable VSync at the SDL2 renderer level to eliminate tearing
+    os.environ.setdefault('SDL_RENDER_VSYNC', '1')
 
 # Color palette
 C_BG     = (0, 0, 0)        # Pure black
@@ -38,6 +44,41 @@ C_GRAY   = (140, 140, 140)  # Mid gray
 C_DARK   = (20, 20, 20)     # Near-black for fills
 C_ORANGE = (255, 140, 0)    # Pressed state
 C_BTN    = (55,  55,  55)   # Action button background
+# Disabled-state colours — defined once at module level, not inside every draw()
+C_DISABLED_BG   = (25, 25, 25)
+C_DISABLED_TEXT = (70, 70, 70)
+
+# ── Render-scale infrastructure ──────────────────────────────────────────────
+# On Pi we render at ONE-THIRD of native resolution and let SDL2 SCALED + GPU
+# upscale 3× to the physical display — 9× fewer pixels drawn per frame.
+# 1920/3 = 640, 1080/3 = 360: perfect integer scaling, no sub-pixel blur.
+# Set ARCADE_FORCE_SCALE=1 in the environment to test scaled mode on a desktop.
+_force_scale = os.environ.get('ARCADE_FORCE_SCALE') == '1'
+RS = 1/3 if (IS_PI or _force_scale) else 1.0   # render-to-native scale factor
+
+
+def _s(v):
+    """Scale a design-pixel value to the render resolution (always ≥ 1)."""
+    return max(1, int(v * RS))
+
+
+# ── Global font-render cache ──────────────────────────────────────────────────
+# FreeType rasterisation is expensive on the Pi; cache rendered surfaces so
+# static text (button labels, tab names, status strings) is only rasterised once.
+_TEXT_CACHE: dict = {}
+
+
+def _rt(font, text, color):
+    """Return a cached rendered text Surface (avoids repeated FreeType calls)."""
+    key = (id(font), str(text), color)
+    surf = _TEXT_CACHE.get(key)
+    if surf is None:
+        if len(_TEXT_CACHE) > 400:          # evict oldest 200 when cache is fat
+            for k in list(_TEXT_CACHE)[:200]:
+                del _TEXT_CACHE[k]
+        surf = font.render(str(text), True, color)
+        _TEXT_CACHE[key] = surf
+    return surf
 
 
 class SimpleButton:
@@ -55,26 +96,23 @@ class SimpleButton:
         self.disabled = disabled
 
     def draw(self, surface, font, font_icon=None):
-        C_DISABLED_BG   = (25, 25, 25)
-        C_DISABLED_TEXT = (70, 70, 70)
         if self.disabled:
-            bg   = C_DISABLED_BG
-            fg   = C_DISABLED_TEXT
+            bg, fg = C_DISABLED_BG, C_DISABLED_TEXT
         else:
             bg = C_ORANGE if self.is_pressed else C_BTN
             fg = C_WHITE
         pygame.draw.rect(surface, bg, self.rect)
         if self.icon and font_icon:
-            icon_surf = font_icon.render(self.icon, True, fg)
-            text_surf = font.render(self.text, True, fg)
-            gap       = 6
+            icon_surf = _rt(font_icon, self.icon, fg)
+            text_surf = _rt(font, self.text, fg)
+            gap       = _s(6)
             total_h   = icon_surf.get_height() + gap + text_surf.get_height()
             top       = self.rect.centery - total_h // 2
             surface.blit(icon_surf, icon_surf.get_rect(centerx=self.rect.centerx, top=top))
             surface.blit(text_surf, text_surf.get_rect(centerx=self.rect.centerx,
                                                         top=top + icon_surf.get_height() + gap))
         else:
-            text_surf = font.render(self.text, True, fg)
+            text_surf = _rt(font, self.text, fg)
             surface.blit(text_surf, text_surf.get_rect(center=self.rect.center))
 
     def handle_event(self, event):
@@ -110,34 +148,34 @@ class TabButton:
         if self.style == 'box':
             if self.active:
                 pygame.draw.rect(surface, C_WHITE, self.rect)
-                text_surf = font.render(self.text, True, C_BG)
+                text_surf = _rt(font, self.text, C_BG)
             else:
-                pygame.draw.rect(surface, C_GRAY, self.rect, 3)
-                text_surf = font.render(self.text, True, C_GRAY)
+                pygame.draw.rect(surface, C_GRAY, self.rect, max(1, _s(3)))
+                text_surf = _rt(font, self.text, C_GRAY)
             surface.blit(text_surf, text_surf.get_rect(center=self.rect.center))
             return
 
         # underline style
         fg = C_WHITE if self.active else C_GRAY
         if self.icon and font_icon:
-            icon_surf = font_icon.render(self.icon, True, fg)
-            text_surf = font.render(self.text, True, fg)
-            gap       = 8
+            icon_surf = _rt(font_icon, self.icon, fg)
+            text_surf = _rt(font, self.text, fg)
+            gap       = _s(8)
             total_w   = icon_surf.get_width() + gap + text_surf.get_width()
             x         = self.rect.centerx - total_w // 2
             cy        = self.rect.centery
             surface.blit(icon_surf, icon_surf.get_rect(left=x, centery=cy))
             surface.blit(text_surf, text_surf.get_rect(left=x + icon_surf.get_width() + gap, centery=cy))
-            line_y = cy + max(icon_surf.get_height(), text_surf.get_height()) // 2 + 4
+            line_y = cy + max(icon_surf.get_height(), text_surf.get_height()) // 2 + _s(4)
         else:
-            text_surf = font.render(self.text, True, fg)
+            text_surf = _rt(font, self.text, fg)
             r = text_surf.get_rect(center=self.rect.center)
             surface.blit(text_surf, r)
-            line_y = r.bottom + 4
+            line_y = r.bottom + _s(4)
 
         line_color = C_WHITE if self.active else C_GRAY
         pygame.draw.line(surface, line_color,
-                         (self.rect.left, line_y), (self.rect.right, line_y), 3)
+                         (self.rect.left, line_y), (self.rect.right, line_y), max(1, _s(3)))
 
     def handle_event(self, event):
         if event.type == MOUSEBUTTONDOWN:
@@ -154,9 +192,11 @@ class ScrollMenu:
     Each button's rect is stored as a content-relative position (x from 0).
     """
 
-    FRICTION       = 0      # velocity multiplier per frame (inertia disabled)
-    SPRING         = 1.0    # overscroll snap-back (1.0 = instant)
-    DRAG_THRESHOLD = 25     # px of horizontal movement to start a scroll
+    FRICTION       = 0.88   # velocity multiplier per frame (1.0 = no decay, 0 = instant stop)
+    SPRING         = 0.18   # overscroll snap-back per frame (lower = smoother bounce)
+    # Drag threshold scales with render resolution so the physical finger
+    # movement needed to trigger a scroll is constant regardless of RS.
+    DRAG_THRESHOLD = max(4, int(25 * RS))
 
     def __init__(self, rect, buttons, btn_w, btn_gap):
         self.rect    = pygame.Rect(rect)
@@ -168,8 +208,8 @@ class ScrollMenu:
             btn_w = (self.rect.width - btn_gap * (len(buttons) + 1)) // len(buttons)
         self.btn_w   = btn_w
 
-        btn_h = min(400, self.rect.height - 15 - 20)  # max 200px, 15px top + 20px bottom padding
-        btn_y = self.rect.y + 15
+        btn_h = min(_s(400), self.rect.height - _s(15) - _s(20))  # 15px top + 20px bottom padding
+        btn_y = self.rect.y + _s(15)
 
         for i, btn in enumerate(self.buttons):
             btn.rect = pygame.Rect(
@@ -192,6 +232,8 @@ class ScrollMenu:
         self.drag_last_t   = 0
         self.is_scroll     = False
         self.pressed_btn   = None
+        # Callback injected by the app to invalidate the static UI cache on press
+        self._cache_dirty_ref = lambda: None
 
     def _screen_rect(self, btn):
         return pygame.Rect(
@@ -235,6 +277,8 @@ class ScrollMenu:
                     btn._press_time  = pygame.time.get_ticks()
                     btn._hold_fired  = False
                     self.pressed_btn = btn
+                    # Pressing a button changes its visual state → invalidate static cache
+                    self._cache_dirty_ref()
                     break
             return True
 
@@ -271,56 +315,59 @@ class ScrollMenu:
             if not self.dragging:
                 return False
             self.dragging = False
-            self.velocity = 0.0  # no inertia on release
-            # Clamp overscroll immediately
+            # Keep velocity so inertia carries through after finger lift,
+            # but reduce to 1/4 so it feels light, not heavy.
+            self.velocity *= 0.25
+            # Clamp overscroll boundaries (spring in update() will ease back).
             if self.scroll_x < self.min_scroll:
                 self.scroll_x = self.min_scroll
+                self.velocity = 0.0
             elif self.scroll_x > self.max_scroll:
                 self.scroll_x = self.max_scroll
+                self.velocity = 0.0
             if not self.is_scroll and self.pressed_btn:
                 self.pressed_btn.is_pressed = False
                 if self.pressed_btn.action and not self.pressed_btn._hold_fired:
                     self.pressed_btn.action()
+                self._cache_dirty_ref()
                 self.pressed_btn = None
             elif self.pressed_btn:
                 self.pressed_btn.is_pressed = False
+                self._cache_dirty_ref()
                 self.pressed_btn = None
             return True
 
         return False
 
     def draw(self, surface, font, font_icon=None):
-        C_DISABLED_BG   = (25, 25, 25)
-        C_DISABLED_TEXT = (70, 70, 70)
         clip = surface.get_clip()
         surface.set_clip(self.rect)
+        c = _s(40)  # corner cut size (scaled)
         for btn in self.buttons:
             sr = self._screen_rect(btn)
             if sr.right <= self.rect.left or sr.left >= self.rect.right:
                 continue
             disabled = getattr(btn, 'disabled', False)
             if disabled:
-                bg = C_DISABLED_BG
-                fg = C_DISABLED_TEXT
+                bg, fg = C_DISABLED_BG, C_DISABLED_TEXT
             else:
                 bg = C_ORANGE if btn.is_pressed else C_BTN
                 fg = C_WHITE
             # Draw button with cut bottom-right corner
-            c = 40  # corner cut size
             l, t, r, b = sr.left, sr.top, sr.right, sr.bottom
             pts = [(l, t), (r, t), (r, b - c), (r - c, b), (l, b)]
             pygame.draw.polygon(surface, bg, pts)
             if btn.icon and font_icon:
-                icon_surf = font_icon.render(btn.icon, True, fg)
-                text_surf = font.render(btn.text, True, fg)
-                gap       = 6
+                icon_surf = _rt(font_icon, btn.icon, fg)
+                text_surf = _rt(font, btn.text, fg)
+                gap       = _s(6)
                 total_h   = icon_surf.get_height() + gap + text_surf.get_height()
                 top       = sr.centery - total_h // 2
                 surface.blit(icon_surf, icon_surf.get_rect(centerx=sr.centerx, top=top))
                 surface.blit(text_surf, text_surf.get_rect(centerx=sr.centerx,
                                                             top=top + icon_surf.get_height() + gap))
             else:
-                text_surf = font.render(btn.text, True, fg)
+                text_surf = _rt(font, btn.text, fg)
                 surface.blit(text_surf, text_surf.get_rect(center=sr.center))
         surface.set_clip(clip)
 
@@ -340,24 +387,35 @@ class ArcadeControlApp:
         self.config = Config()
         
         # Screen setup
-        self.width = self.config['screen_width']
-        self.height = self.config['screen_height']
-        print(f"Creating display: {self.width}x{self.height}")
-        flags = pygame.FULLSCREEN if IS_PI else 0
-        self.screen = pygame.display.set_mode((self.width, self.height), flags)
+        # On Pi: render at one-third native resolution; SDL2 SCALED + GPU upscales 3×.
+        # DOUBLEBUF + vsync=1 eliminates tearing.
+        phys_w = self.config['screen_width']
+        phys_h = self.config['screen_height']
+        self.width  = int(phys_w * RS)
+        self.height = int(phys_h * RS)
+        print(f"Render: {self.width}x{self.height}  native: {phys_w}x{phys_h}  RS={RS}")
+        if IS_PI or _force_scale:
+            flags = pygame.FULLSCREEN | pygame.SCALED | pygame.DOUBLEBUF
+        else:
+            flags = 0
+        self.screen = pygame.display.set_mode((self.width, self.height), flags, vsync=1)
         print("Display created successfully")
         pygame.display.set_caption("Arcade Control")
+
+        # Helper: scale a design font-size to the render resolution
+        def _fs(size):
+            return max(6, int(size * RS))
 
         # Fonts
         try:
             font_path = os.path.join(os.path.dirname(__file__), 'fonts', 'Rajdhani-Bold.ttf')
-            self.font = pygame.font.Font(font_path, 72)
-            self.font_large = pygame.font.Font(font_path, 108)
-            self.font_action = pygame.font.Font(font_path, 36)
+            self.font        = pygame.font.Font(font_path, _fs(72))
+            self.font_large  = pygame.font.Font(font_path, _fs(108))
+            self.font_action = pygame.font.Font(font_path, _fs(36))
         except:
-            self.font = pygame.font.Font(None, 72)
-            self.font_large = pygame.font.Font(None, 96)
-            self.font_action = pygame.font.Font(None, 36)
+            self.font        = pygame.font.Font(None, _fs(72))
+            self.font_large  = pygame.font.Font(None, _fs(96))
+            self.font_action = pygame.font.Font(None, _fs(36))
 
         self.bg_color = C_BG
         self.text_color = C_WHITE
@@ -365,35 +423,38 @@ class ArcadeControlApp:
         # Smaller font for tab bar and slot sub-tabs
         try:
             font_path = os.path.join(os.path.dirname(__file__), 'fonts', 'Rajdhani-Bold.ttf')
-            self.font_tab = pygame.font.Font(font_path, 42)
-            self.font_slot = pygame.font.Font(font_path, 30)
+            self.font_tab  = pygame.font.Font(font_path, _fs(42))
+            self.font_slot = pygame.font.Font(font_path, _fs(30))
         except:
-            self.font_tab = pygame.font.Font(None, 42)
-            self.font_slot = pygame.font.Font(None, 30)
+            self.font_tab  = pygame.font.Font(None, _fs(42))
+            self.font_slot = pygame.font.Font(None, _fs(30))
 
-        # Monospace font for clock
         # Monospace font for clock — bundled with the project
         try:
             mono_path = os.path.join(os.path.dirname(__file__), 'fonts', 'NotoSansMono-Regular.ttf')
-            self.font_mono = pygame.font.Font(mono_path, 34)
+            self.font_mono = pygame.font.Font(mono_path, _fs(34))
         except:
-            self.font_mono = pygame.font.SysFont('monospace', 34)
+            self.font_mono = pygame.font.SysFont('monospace', _fs(34))
 
         # Material Symbols icon font
         try:
             icon_path = os.path.join(os.path.dirname(__file__), 'fonts', 'MaterialSymbols.ttf')
-            _f = pygame.font.Font(icon_path, 52)
-            _f.render('test', True, (255,255,255))  # validate not a null/variable font
+            _f = pygame.font.Font(icon_path, _fs(52))
+            _f.render('test', True, (255, 255, 255))  # validate not a null/variable font
             self.font_icon        = _f
-            self.font_icon_sm     = pygame.font.Font(icon_path, 36)
-            self.font_icon_action = pygame.font.Font(icon_path, 80)
-            self.font_icon_lock   = pygame.font.Font(icon_path, 180)
+            self.font_icon_sm     = pygame.font.Font(icon_path, _fs(36))
+            self.font_icon_action = pygame.font.Font(icon_path, _fs(80))
+            self.font_icon_lock   = pygame.font.Font(icon_path, _fs(180))
         except Exception as e:
             print(f"[WARN] Icon font not loaded: {e}")
             self.font_icon        = None
             self.font_icon_sm     = None
             self.font_icon_action = None
             self.font_icon_lock   = None
+
+        # Static-UI render cache: rebuilt only when tabs/buttons change state
+        self._main_cache       = None
+        self._main_cache_dirty = True
 
         # State
         self.running = True
@@ -450,12 +511,12 @@ class ArcadeControlApp:
             ['7', '8', '9'],
             ['C', '0', 'OK']
         ]
-        GAP_N    = 8
+        GAP_N    = _s(8)
         NUM_ROWS = 4
         NUM_COLS = 3
-        NUM_TOP  = 310                             # below icon + pin dots
-        PAD_SIDE = 226                             # horizontal margin
-        PAD_BOT  = 20
+        NUM_TOP  = _s(310)                              # below icon + pin dots
+        PAD_SIDE = _s(226)                              # horizontal margin
+        PAD_BOT  = _s(20)
         avail_w  = self.width - PAD_SIDE * 2
         avail_h  = self.height - NUM_TOP - PAD_BOT
         btn_w    = (avail_w - GAP_N * (NUM_COLS - 1)) // NUM_COLS
@@ -474,15 +535,15 @@ class ArcadeControlApp:
                 ))
 
         # Layout constants
-        GAP      = 4
-        TAB_Y    = 90
-        TAB_H    = 140
+        GAP      = _s(4)
+        TAB_Y    = _s(90)
+        TAB_H    = _s(140)
         TAB_W    = (self.width - GAP * 3) // 4   # 4 tabs with 3 gaps between
-        SLOT_Y   = TAB_Y + TAB_H + 10  # 155  – 10px gap below tab bar
-        SLOT_H   = 130
+        SLOT_Y   = TAB_Y + TAB_H + _s(10)
+        SLOT_H   = _s(130)
         SLOT_W   = (self.width - GAP * 9) // 10  # 10 items (GENERAL + 1-9) with 9 gaps
-        CONT_Y   = TAB_Y + TAB_H        # 145  – non-Partida content starts here
-        CONT_Y_P = SLOT_Y + SLOT_H      # 220  – Partida content starts here
+        CONT_Y   = TAB_Y + TAB_H        # non-Partida content starts here
+        CONT_Y_P = SLOT_Y + SLOT_H      # Partida content starts here
 
         # Main tab bar (4 tabs)
         # Material Icons codepoints (static font, U+E000 range)
@@ -518,9 +579,9 @@ class ArcadeControlApp:
 
         # Per-tab scroll menus
         def make_scroll(y, h, btns):
-            return ScrollMenu((0, y, self.width, h), btns, btn_w=340, btn_gap=20)
+            return ScrollMenu((0, y, self.width, h), btns, btn_w=_s(340), btn_gap=_s(20))
 
-        CLOCK_H  = 60                        # reserved for bottom status bar
+        CLOCK_H  = _s(60)                        # reserved for bottom status bar
         h_norm = self.height - CONT_Y - CLOCK_H
         h_part = self.height - CONT_Y_P - CLOCK_H
 
@@ -575,6 +636,17 @@ class ArcadeControlApp:
             + self.tab_scroll_menus['monedero'].buttons
         )
 
+        # Wire cache-invalidation callback into every scroll menu so button
+        # press/release triggers a static-cache rebuild before the next draw.
+        def _mark_cache_dirty():
+            self._main_cache_dirty = True
+
+        all_menus = list(self.tab_scroll_menus.values()) + [
+            self.partida_general_scroll, self.partida_slot_scroll
+        ]
+        for menu in all_menus:
+            menu._cache_dirty_ref = _mark_cache_dirty
+
     def _active_scroll_menu(self):
         """Return the scroll menu for the currently active tab/sub-tab."""
         if self.current_tab == 'partida':
@@ -586,11 +658,13 @@ class ArcadeControlApp:
         tab_ids = ['sistema', 'sonido', 'partida', 'monedero']
         for btn, tid in zip(self.tab_buttons, tab_ids):
             btn.active = (tid == tab_id)
+        self._main_cache_dirty = True
 
     def switch_slot(self, slot):
         self.current_slot = slot
         for i, btn in enumerate(self.slot_buttons):
             btn.active = (i == slot)
+        self._main_cache_dirty = True
 
     def numpad_press(self, key):
         """Handle numpad key press"""
@@ -872,14 +946,14 @@ class ArcadeControlApp:
             dots = "." * (elapsed % 4)
             self.screen.fill(C_BG)
             self.screen.blit(
-                self.font.render("Actualizando" + dots, True, C_WHITE),
-                self.font.render("Actualizando" + dots, True, C_WHITE).get_rect(
-                    center=(self.width // 2, self.height // 2 - 50))
+                _rt(self.font, "Actualizando" + dots, C_WHITE),
+                _rt(self.font, "Actualizando" + dots, C_WHITE).get_rect(
+                    center=(self.width // 2, self.height // 2 - _s(50)))
             )
             self.screen.blit(
-                self.font_tab.render(last_line[:55], True, C_GRAY),
-                self.font_tab.render(last_line[:55], True, C_GRAY).get_rect(
-                    center=(self.width // 2, self.height // 2 + 20))
+                _rt(self.font_tab, last_line[:55], C_GRAY),
+                _rt(self.font_tab, last_line[:55], C_GRAY).get_rect(
+                    center=(self.width // 2, self.height // 2 + _s(20)))
             )
             pygame.display.flip()
             self.clock.tick(10)
@@ -901,11 +975,11 @@ class ArcadeControlApp:
     def _show_update_result(self, success, line1):
         self.screen.fill(C_BG)
         color = C_WHITE if success else C_ORANGE
-        l1 = self.font.render(line1[:40], True, color)
-        self.screen.blit(l1, l1.get_rect(center=(self.width // 2, self.height // 2 - 40)))
+        l1 = _rt(self.font, line1[:40], color)
+        self.screen.blit(l1, l1.get_rect(center=(self.width // 2, self.height // 2 - _s(40))))
         if success:
-            l2 = self.font.render("Reiniciando...", True, C_GRAY)
-            self.screen.blit(l2, l2.get_rect(center=(self.width // 2, self.height // 2 + 40)))
+            l2 = _rt(self.font, "Reiniciando...", C_GRAY)
+            self.screen.blit(l2, l2.get_rect(center=(self.width // 2, self.height // 2 + _s(40))))
         pygame.display.flip()
         pygame.time.wait(2000)
 
@@ -919,9 +993,14 @@ class ArcadeControlApp:
             while True:
                 try:
                     with open('/var/run/arcade-hid-status') as f:
-                        self.bt_connected = f.read().strip() == 'connected'
+                        connected = f.read().strip() == 'connected'
                 except Exception:
-                    self.bt_connected = False
+                    connected = False
+                if connected != self.bt_connected:
+                    self.bt_connected = connected
+                    self._main_cache_dirty = True
+                else:
+                    self.bt_connected = connected
                 _t.sleep(3)
         t = threading.Thread(target=_poll, daemon=True)
         t.start()
@@ -936,6 +1015,8 @@ class ArcadeControlApp:
             while True:
                 # Power LED → pc_on
                 pc_on = self.gpio.read_power_led()
+                if pc_on != self.pc_on:
+                    self._main_cache_dirty = True
                 if pc_on and not self.pc_on:
                     self.pc_on_since = _t.time()
                 elif not pc_on and self.pc_on:
@@ -1108,17 +1189,17 @@ class ArcadeControlApp:
         self._bt_save_log_file('refresh')
     def _bt_build_buttons(self):
         devices = self.bt_data.get('devices', [])
-        ROW_H       = 110
-        ROW_Y_START = 185
-        BTN_W       = 260
-        BTN_H       = 72
+        ROW_H       = _s(110)
+        ROW_Y_START = _s(185)
+        BTN_W       = _s(260)
+        BTN_H       = _s(72)
 
         self.bt_remove_buttons = []
         for i, dev in enumerate(devices):
             y   = ROW_Y_START + i * ROW_H
             mac = dev['mac']
             btn = SimpleButton(
-                (self.width - BTN_W - 30, y + (ROW_H - BTN_H) // 2, BTN_W, BTN_H),
+                (self.width - BTN_W - _s(30), y + (ROW_H - BTN_H) // 2, BTN_W, BTN_H),
                 'DESEMPAREJAR',
                 action=lambda m=mac: self.bt_remove_device(m),
                 icon='\ue872',   # delete
@@ -1126,10 +1207,10 @@ class ArcadeControlApp:
             self.bt_remove_buttons.append(btn)
 
         # Bottom row: activate + refresh + diagnose + close
-        btn_h = 90
-        btn_y = self.height - btn_h - 25
-        btn_w = 260
-        gap   = 18
+        btn_h = _s(90)
+        btn_y = self.height - btn_h - _s(25)
+        btn_w = _s(260)
+        gap   = _s(18)
         n     = 4
         total_w = n * btn_w + (n - 1) * gap
         x = (self.width - total_w) // 2
@@ -1376,30 +1457,30 @@ class ArcadeControlApp:
         self.screen.fill(C_BG)
 
         # ── Header ───────────────────────────────────────────────────
-        title = self.font.render('BLUETOOTH', True, C_WHITE)
-        self.screen.blit(title, title.get_rect(centerx=self.width // 2, top=18))
+        title = _rt(self.font, 'BLUETOOTH', C_WHITE)
+        self.screen.blit(title, title.get_rect(centerx=self.width // 2, top=_s(18)))
 
         srv_ok    = self.bt_data.get('server_active', False)
         srv_color = C_WHITE if srv_ok else C_GRAY
         srv_text  = '● SERVIDOR ACTIVO' if srv_ok else '○ SERVIDOR INACTIVO'
-        srv_surf  = self.font_action.render(srv_text, True, srv_color)
-        self.screen.blit(srv_surf, (30, 28))
+        srv_surf  = _rt(self.font_action, srv_text, srv_color)
+        self.screen.blit(srv_surf, (_s(30), _s(28)))
 
-        pygame.draw.line(self.screen, C_GRAY, (20, 105), (self.width - 20, 105), 2)
+        pygame.draw.line(self.screen, C_GRAY, (_s(20), _s(105)), (self.width - _s(20), _s(105)), max(1, _s(2)))
 
         # ── Column headers ────────────────────────────────────────────
-        for text, x in [('DISPOSITIVO', 80), ('MAC', 520), ('ESTADO', 870)]:
-            self.screen.blit(self.font_slot.render(text, True, C_GRAY), (x, 112))
-        pygame.draw.line(self.screen, C_GRAY, (20, 155), (self.width - 20, 155), 1)
+        for text, x in [('DISPOSITIVO', _s(80)), ('MAC', _s(520)), ('ESTADO', _s(870))]:
+            self.screen.blit(_rt(self.font_slot, text, C_GRAY), (x, _s(112)))
+        pygame.draw.line(self.screen, C_GRAY, (_s(20), _s(155)), (self.width - _s(20), _s(155)), 1)
 
         # ── Device rows ───────────────────────────────────────────────
-        ROW_H       = 110
-        ROW_Y_START = 158
+        ROW_H       = _s(110)
+        ROW_Y_START = _s(158)
         devices     = self.bt_data.get('devices', [])
 
         if not devices:
-            s = self.font_tab.render('No hay dispositivos emparejados', True, C_GRAY)
-            self.screen.blit(s, s.get_rect(centerx=self.width // 2, top=230))
+            s = _rt(self.font_tab, 'No hay dispositivos emparejados', C_GRAY)
+            self.screen.blit(s, s.get_rect(centerx=self.width // 2, top=_s(230)))
         else:
             for i, dev in enumerate(devices):
                 y  = ROW_Y_START + i * ROW_H
@@ -1409,36 +1490,36 @@ class ArcadeControlApp:
                     pygame.draw.rect(self.screen, (15, 15, 30), (0, y, self.width, ROW_H))
 
                 # BT icon + name
-                x_icon = 30
+                x_icon = _s(30)
                 if self.font_icon_sm:
-                    ic = self.font_icon_sm.render('\ue1a8', True, C_WHITE)
+                    ic = _rt(self.font_icon_sm, '\ue1a8', C_WHITE)
                     self.screen.blit(ic, (x_icon, cy - ic.get_height() // 2))
-                    x_icon += ic.get_width() + 8
-                name_s = self.font_tab.render(dev['name'][:26], True, C_WHITE)
+                    x_icon += ic.get_width() + _s(8)
+                name_s = _rt(self.font_tab, dev['name'][:26], C_WHITE)
                 self.screen.blit(name_s, (x_icon, cy - name_s.get_height() // 2))
 
                 # MAC
-                mac_s = self.font_action.render(dev['mac'], True, C_GRAY)
-                self.screen.blit(mac_s, (520, cy - mac_s.get_height() // 2))
+                mac_s = _rt(self.font_action, dev['mac'], C_GRAY)
+                self.screen.blit(mac_s, (_s(520), cy - mac_s.get_height() // 2))
 
                 # Connection badge
                 if dev['connected']:
-                    badge_s = self.font_action.render('● CONECTADO',    True, C_WHITE)
+                    badge_s = _rt(self.font_action, '● CONECTADO',    C_WHITE)
                 else:
-                    badge_s = self.font_action.render('○ NO CONECTADO', True, C_GRAY)
-                self.screen.blit(badge_s, (870, cy - badge_s.get_height() // 2))
+                    badge_s = _rt(self.font_action, '○ NO CONECTADO', C_GRAY)
+                self.screen.blit(badge_s, (_s(870), cy - badge_s.get_height() // 2))
 
                 # Remove button
                 if i < len(self.bt_remove_buttons):
                     self.bt_remove_buttons[i].draw(self.screen, self.font_action, self.font_icon_sm)
 
         # ── Log panel ────────────────────────────────────────────────────
-        LOG_Y = max(510, ROW_Y_START + max(1, len(devices)) * ROW_H + 20)
-        pygame.draw.line(self.screen, C_GRAY, (20, LOG_Y), (self.width - 20, LOG_Y), 1)
+        LOG_Y = max(_s(510), ROW_Y_START + max(1, len(devices)) * ROW_H + _s(20))
+        pygame.draw.line(self.screen, C_GRAY, (_s(20), LOG_Y), (self.width - _s(20), LOG_Y), 1)
         n_logs    = len(self.bt_logs)
-        line_h    = 24
-        log_top   = LOG_Y + 40
-        log_bot   = self.height - 140
+        line_h    = _s(24)
+        log_top   = LOG_Y + _s(40)
+        log_bot   = self.height - _s(140)
         max_lines = max(1, (log_bot - log_top) // line_h)
         # Clamp scroll so 0 = bottom (newest), positive = older
         max_scroll = max(0, n_logs - max_lines)
@@ -1447,7 +1528,7 @@ class ArcadeControlApp:
         visible_logs = self.bt_logs[max(0, n_logs - max_lines - scroll) : (n_logs - scroll) if scroll else n_logs]
         # Header
         hdr_text = f'LOGS ({n_logs} líneas)  ▲▼ scroll  — guardado en /tmp/arcade-bt-*.log'
-        self.screen.blit(self.font_slot.render(hdr_text, True, C_GRAY), (30, LOG_Y + 8))
+        self.screen.blit(_rt(self.font_slot, hdr_text, C_GRAY), (_s(30), LOG_Y + _s(8)))
         # Lines
         y_log = log_top
         for ln in visible_logs:
@@ -1458,22 +1539,24 @@ class ArcadeControlApp:
                   else (180, 255, 180)
                   if any(k in ln.lower() for k in ('connected', 'ready', 'registered', 'keyboard ready', 'listo'))
                   else C_GRAY)
-            self.screen.blit(self.font_slot.render(ln[:160], True, lc), (30, y_log))
+            self.screen.blit(_rt(self.font_slot, ln[:160], lc), (_s(30), y_log))
             y_log += line_h
         # Scrollbar
         if n_logs > max_lines:
             sb_h   = log_bot - log_top
-            tb_h   = max(20, sb_h * max_lines // n_logs)
+            tb_h   = max(_s(20), sb_h * max_lines // n_logs)
             tb_y   = log_top + (sb_h - tb_h) * scroll // max(1, max_scroll)
-            pygame.draw.rect(self.screen, (60, 60, 80),  (self.width - 18, log_top, 10, sb_h), border_radius=5)
-            pygame.draw.rect(self.screen, (160, 160, 200), (self.width - 18, tb_y, 10, tb_h), border_radius=5)
+            pygame.draw.rect(self.screen, (60, 60, 80),
+                             (self.width - _s(18), log_top, _s(10), sb_h), border_radius=_s(5))
+            pygame.draw.rect(self.screen, (160, 160, 200),
+                             (self.width - _s(18), tb_y, _s(10), tb_h), border_radius=_s(5))
 
         # ── Status message ───────────────────────────────────────────────
         if self.bt_status_msg:
             color = C_ORANGE if self.bt_status_msg.startswith('Error') else C_WHITE
-            msg_s = self.font_tab.render(self.bt_status_msg[:70], True, color)
+            msg_s = _rt(self.font_tab, self.bt_status_msg[:70], color)
             self.screen.blit(msg_s, msg_s.get_rect(
-                centerx=self.width // 2, bottom=self.height - 130))
+                centerx=self.width // 2, bottom=self.height - _s(130)))
 
         # ── Bottom buttons ───────────────────────────────────────────────
         for btn in (self.bt_activate_btn, self.bt_refresh_btn,
@@ -1493,18 +1576,18 @@ class ArcadeControlApp:
             return
 
         # Lock icon centered at top
-        icon_y = 120
+        icon_y = _s(120)
         if self.font_icon_lock:
-            icon_surf = self.font_icon_lock.render('\ue897', True, C_WHITE)
+            icon_surf = _rt(self.font_icon_lock, '\ue897', C_WHITE)
             self.screen.blit(icon_surf, icon_surf.get_rect(center=(self.width // 2, icon_y)))
-            dots_y = icon_y + icon_surf.get_height() // 2 + 30
+            dots_y = icon_y + icon_surf.get_height() // 2 + _s(30)
         else:
-            dots_y = 200
+            dots_y = _s(200)
 
         # PIN dot indicators centered
         max_digits = 6
-        dot_r   = 12
-        dot_gap = 16
+        dot_r   = _s(12)
+        dot_gap = _s(16)
         total_w = max_digits * (dot_r * 2) + (max_digits - 1) * dot_gap
         dot_cx  = (self.width - total_w) // 2 + dot_r
         for i in range(max_digits):
@@ -1512,7 +1595,7 @@ class ArcadeControlApp:
             if i < len(self.pin_input):
                 pygame.draw.circle(self.screen, C_WHITE, (cx, dots_y), dot_r)
             else:
-                pygame.draw.circle(self.screen, C_GRAY, (cx, dots_y), dot_r, 2)
+                pygame.draw.circle(self.screen, C_GRAY, (cx, dots_y), dot_r, max(1, _s(2)))
 
         for btn in self.numpad_buttons:
             btn.draw(self.screen, self.font_tab)
@@ -1522,70 +1605,81 @@ class ArcadeControlApp:
         self.draw_lock_screen_base()
         pygame.display.flip()
         
-    def draw_main_screen_base(self):
-        self.screen.fill(self.bg_color)
+    def _rebuild_main_cache(self):
+        """Pre-render tab bar and slot sub-tabs into a Surface (NOT the scroll area)."""
+        if self._main_cache is None:
+            self._main_cache = pygame.Surface((self.width, self.height))
+        s = self._main_cache
+        s.fill(C_BG)
 
-        # ── Top status bar ────────────────────────────────────────────────────
-        BAR_CY = 44   # vertical centre of the bar (fits inside 0-89px before tabs)
-        MARGIN = 20
+        # Sync button state so disabled flags are correct when cached
+        self.power_btn.text = 'APAGAR PC' if self.pc_on else 'ENCENDER PC'
+        self.reset_btn.disabled = not self.pc_on
+        for btn in self.bt_action_btns:
+            btn.disabled = not self.bt_connected
+
+        for btn in self.tab_buttons:
+            btn.draw(s, self.font_tab, self.font_icon)
+
+        if self.current_tab == 'partida':
+            for btn in self.slot_buttons:
+                btn.draw(s, self.font_slot)
+
+        # Scroll menu is NOT drawn into the cache — it is drawn live every frame
+        # so that scroll_x changes are visible immediately without cache invalidation.
+        self._main_cache_dirty = False
+
+    def draw_main_screen_base(self):
+        # Rebuild tab/slot layer only when something structural changed
+        if self._main_cache_dirty:
+            self._rebuild_main_cache()
+        self.screen.blit(self._main_cache, (0, 0))
+
+        # Scroll area: always fill background and draw live (scroll position changes every frame)
+        menu = self._active_scroll_menu()
+        pygame.draw.rect(self.screen, C_BG, menu.rect)
+        menu.draw(self.screen, self.font_action, self.font_icon_action)
+
+        # ── Top status bar (always repainted — clock ticks every second) ────────
+        BAR_CY  = _s(44)
+        MARGIN  = _s(20)
+        BAR_H   = _s(90)   # height of the top strip (up to the tab row)
+        pygame.draw.rect(self.screen, C_BG, (0, 0, self.width, BAR_H))
 
         # Clock — top left
         datetime_str = datetime.now(ZoneInfo('Europe/Madrid')).strftime('%d-%m-%Y  %H:%M:%S')
-        time_surf = self.font_mono.render(datetime_str, True, C_GRAY)
+        time_surf = _rt(self.font_mono, datetime_str, C_GRAY)
         clock_rect = time_surf.get_rect(midleft=(MARGIN, BAR_CY))
         self.screen.blit(time_surf, clock_rect)
 
         # Weather — right of clock (only when WiFi up and data available)
         if self.wifi_connected and self.weather_data:
             wx_str  = f"{self.weather_data['temp']:.0f}°C  {self.weather_data['condition']}"
-            wx_surf = self.font_mono.render(wx_str, True, (180, 210, 255))
-            self.screen.blit(wx_surf, wx_surf.get_rect(midleft=(clock_rect.right + 22, BAR_CY)))
+            wx_surf = _rt(self.font_mono, wx_str, (180, 210, 255))
+            self.screen.blit(wx_surf, wx_surf.get_rect(midleft=(clock_rect.right + _s(22), BAR_CY)))
 
         # Right-side indicators (rendered right→left: BT, HDD, PC, WiFi)
-        DOT_R = 7
+        DOT_R = _s(7)
         x = self.width - MARGIN
         for label, connected in [('BT',   self.bt_connected),
                                    ('HDD',  self.hdd_on),
                                    ('PC',   self.pc_on),
                                    ('WiFi', self.wifi_connected)]:
             color    = (0, 210, 100) if connected else (120, 120, 120)
-            lbl_surf = self.font_mono.render(label, True, color)
+            lbl_surf = _rt(self.font_mono, label, color)
             lbl_rect = lbl_surf.get_rect(midright=(x, BAR_CY))
-            dot_cx   = lbl_rect.left - 10
+            dot_cx   = lbl_rect.left - _s(10)
             pygame.draw.circle(self.screen, color, (dot_cx, BAR_CY), DOT_R)
             self.screen.blit(lbl_surf, lbl_rect)
-            x = dot_cx - 20
-
-        # Keep power button label/icon in sync with PC state
-        if self.pc_on:
-            self.power_btn.text = 'APAGAR PC'
-            self.power_btn.icon = '\ue8ac'
-        else:
-            self.power_btn.text = 'ENCENDER PC'
-            self.power_btn.icon = '\ue8ac'
-        # Reset button only active while PC is on
-        self.reset_btn.disabled = not self.pc_on
-        # BT-dependent buttons only active while BT is connected
-        for btn in self.bt_action_btns:
-            btn.disabled = not self.bt_connected
-
-        # Main tab bar
-        for btn in self.tab_buttons:
-            btn.draw(self.screen, self.font_tab, self.font_icon)
-
-        # Slot sub-tabs (only for Partida)
-        if self.current_tab == 'partida':
-            for btn in self.slot_buttons:
-                btn.draw(self.screen, self.font_slot)
-
-        # Scrollable content area for active tab
-        self._active_scroll_menu().draw(self.screen, self.font_action, self.font_icon_action)
+            x = dot_cx - _s(20)
 
         # ── Bottom status bar ────────────────────────────────────────────────
-        BAR_BOT_CY = self.height - 30
+        BAR_BOT_CY = self.height - _s(30)
+        pygame.draw.rect(self.screen, C_BG,
+                         (0, self.height - _s(60), self.width, _s(60)))
         # Coin counters — left
         coin_str  = f'P1: {self.coin_p1_count}   P2: {self.coin_p2_count}'
-        coin_surf = self.font_mono.render(coin_str, True, C_GRAY)
+        coin_surf = _rt(self.font_mono, coin_str, C_GRAY)
         self.screen.blit(coin_surf, coin_surf.get_rect(midleft=(MARGIN, BAR_BOT_CY)))
         # PC uptime — right (only while PC is on)
         if self.pc_on and self.pc_on_since is not None:
@@ -1593,7 +1687,7 @@ class ArcadeControlApp:
             h = elapsed // 3600
             m = (elapsed % 3600) // 60
             s = elapsed % 60
-            up_surf = self.font_mono.render(f'PC  {h:02d}:{m:02d}:{s:02d}', True, (0, 210, 100))
+            up_surf = _rt(self.font_mono, f'PC  {h:02d}:{m:02d}:{s:02d}', (0, 210, 100))
             self.screen.blit(up_surf, up_surf.get_rect(midright=(self.width - MARGIN, BAR_BOT_CY)))
 
     def draw_main_screen(self):
@@ -1604,9 +1698,9 @@ class ArcadeControlApp:
     def open_debug(self):
         self.debug_screen = True
         self.debug_info = self.get_network_info()
-        btn_w, btn_h = 240, 65
+        btn_w, btn_h = _s(240), _s(65)
         self.debug_close_btn = SimpleButton(
-            ((self.width - btn_w) // 2, 370, btn_w, btn_h),
+            ((self.width - btn_w) // 2, _s(370), btn_w, btn_h),
             "CERRAR",
             action=self.close_debug,
         )
@@ -1666,9 +1760,9 @@ class ArcadeControlApp:
         self.screen.fill(C_BG)
         info = self.debug_info
 
-        title = self.font.render("DEBUG", True, C_WHITE)
-        self.screen.blit(title, title.get_rect(center=(self.width // 2, 45)))
-        pygame.draw.line(self.screen, C_GRAY, (20, 85), (self.width - 20, 85), 2)
+        title = _rt(self.font, "DEBUG", C_WHITE)
+        self.screen.blit(title, title.get_rect(center=(self.width // 2, _s(45))))
+        pygame.draw.line(self.screen, C_GRAY, (_s(20), _s(85)), (self.width - _s(20), _s(85)), max(1, _s(2)))
 
         rows = [
             ("WiFi",      "CONECTADO" if info['connected'] else "NO CONECTADO",
@@ -1678,18 +1772,18 @@ class ArcadeControlApp:
             ("IP",        info['ip'] or "\u2014",          C_WHITE),
         ]
 
-        y = 110
-        row_h = 55
-        col_label = 40
-        col_value = 240
+        y = _s(110)
+        row_h     = _s(55)
+        col_label = _s(40)
+        col_value = _s(240)
         for label, value, color in rows:
-            lbl = self.font_tab.render(label + ":", True, C_GRAY)
+            lbl = _rt(self.font_tab, label + ":", C_GRAY)
             self.screen.blit(lbl, (col_label, y + (row_h - lbl.get_height()) // 2))
-            val = self.font_tab.render(value, True, color)
+            val = _rt(self.font_tab, value, color)
             self.screen.blit(val, (col_value, y + (row_h - val.get_height()) // 2))
             y += row_h
 
-        pygame.draw.line(self.screen, C_GRAY, (20, y + 10), (self.width - 20, y + 10), 2)
+        pygame.draw.line(self.screen, C_GRAY, (_s(20), y + _s(10)), (self.width - _s(20), y + _s(10)), max(1, _s(2)))
         self.debug_close_btn.draw(self.screen, self.font_tab)
         pygame.display.flip()
 
@@ -1718,7 +1812,7 @@ class ArcadeControlApp:
         btn_h   = int(dialog_h * 0.30)
         btn_gap = int(dialog_w * 0.08)
 
-        title_surf  = self.font.render(self.confirmation_dialog['title'], True, C_WHITE)
+        title_surf  = _rt(self.font, self.confirmation_dialog['title'], C_WHITE)
         inner_gap   = int(dialog_h * 0.10)
         total_h     = title_surf.get_height() + inner_gap + btn_h
         content_top = dialog_y + (dialog_h - total_h) // 2
@@ -1749,10 +1843,10 @@ class ArcadeControlApp:
             (self.dialog_yes_btn, '\ue876', 'SÍ'),
             (self.dialog_no_btn,  '\ue5cd', 'NO'),
         ]:
-            text_surf = self.font.render(label, True, C_WHITE)
+            text_surf = _rt(self.font, label, C_WHITE)
             if self.font_icon:
-                icon_surf = self.font_icon.render(icon_cp, True, C_WHITE)
-                gap = 10
+                icon_surf = _rt(self.font_icon, icon_cp, C_WHITE)
+                gap = _s(10)
                 total_w = icon_surf.get_width() + gap + text_surf.get_width()
                 x  = btn.rect.centerx - total_w // 2
                 cy = btn.rect.centery
@@ -1839,6 +1933,11 @@ class ArcadeControlApp:
         while self.running:
             self.handle_events()
 
+            # Skip all rendering when screen is off (saves ~100% CPU in standby)
+            if not self.screen_on:
+                self.clock.tick(10)
+                continue
+
             # Hold-to-repeat for buttons with hold_action
             now = pygame.time.get_ticks()
             if not self.bt_screen and not self.locked and not self.confirmation_dialog:
@@ -1865,7 +1964,7 @@ class ArcadeControlApp:
                 self.draw_lock_screen()
             else:
                 self.draw_main_screen()
-                
+
             self.clock.tick(30)
             
         self.cleanup()
