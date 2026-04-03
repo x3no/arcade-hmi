@@ -54,7 +54,7 @@ C_DISABLED_TEXT = (70, 70, 70)
 # 1920/3 = 640, 1080/3 = 360: perfect integer scaling, no sub-pixel blur.
 # Set ARCADE_FORCE_SCALE=1 in the environment to test scaled mode on a desktop.
 _force_scale = os.environ.get('ARCADE_FORCE_SCALE') == '1'
-RS = 1/4 if (IS_PI or _force_scale) else 1.0   # render-to-native scale factor
+RS = 1/3 if (IS_PI or _force_scale) else 1.0   # render-to-native scale factor
 
 
 def _s(v):
@@ -395,33 +395,45 @@ class ArcadeControlApp:
         self.config = Config()
         
         # Screen setup
-        # On Pi: render at RS=1/3 (640×360) then upscale manually to 1920×1080
-        # using pygame.transform.scale each frame. This avoids relying on
-        # pygame.SCALED (which requires the SDL2 renderer and shows a tiny
-        # centered window in software/fkms mode on Pi).
+        # On Pi: start_x11.sh sets xrandr --fb 640x360 so X11 reports a 640x360
+        # desktop. The VC4 HVS hardware scaler upscales to 1920x1080 for free.
+        # We render directly to the display surface — no CPU-side scale needed.
+        # Fallback: if X11 still reports 1920x1080 (xrandr --fb failed), we use
+        # the manual pygame.transform.scale path.
         _info = pygame.display.Info()
         if _info.current_w > 0 and _info.current_h > 0:
-            phys_w, phys_h = _info.current_w, _info.current_h
+            disp_w, disp_h = _info.current_w, _info.current_h
         else:
-            phys_w = self.config['screen_width']
-            phys_h = self.config['screen_height']
-        self.width  = int(phys_w * RS)
-        self.height = int(phys_h * RS)
-        print(f"Render: {self.width}x{self.height}  native: {phys_w}x{phys_h}  RS={RS}")
+            disp_w = self.config['screen_width']
+            disp_h = self.config['screen_height']
+
+        # Desired render size
+        phys_w = self.config['screen_width']   # 1920 — used only for manual scale fallback
+        phys_h = self.config['screen_height']  # 1080
+        self.width  = int(phys_w * RS)         # 640
+        self.height = int(phys_h * RS)         # 360
+
         if IS_PI or _force_scale:
-            # Display surface = full physical resolution, fullscreen
             flags = pygame.FULLSCREEN | pygame.DOUBLEBUF
-            self._display_surf = pygame.display.set_mode((phys_w, phys_h), flags, vsync=1)
-            # Canvas = small render target (640×360); drawn here, then scaled up
-            self.screen = pygame.Surface((self.width, self.height)).convert()
-            self._scale_to_display = True
+            # If xrandr --fb already shrank the desktop to 640x360, render direct
+            if disp_w == self.width and disp_h == self.height:
+                self.screen = pygame.display.set_mode((self.width, self.height), flags, vsync=1)
+                self._display_surf   = self.screen
+                self._scale_to_display = False
+                print(f"Render: {self.width}x{self.height} via HW scaler (xrandr --fb)")
+            else:
+                # Fallback: manual software scale
+                self._display_surf = pygame.display.set_mode((disp_w, disp_h), flags, vsync=1)
+                self.screen = pygame.Surface((self.width, self.height)).convert()
+                self._scale_to_display = True
+                print(f"Render: {self.width}x{self.height}  display: {disp_w}x{disp_h}  (SW scale)")
         else:
             flags = 0
             self.screen = pygame.display.set_mode((self.width, self.height), flags, vsync=1)
-            self._display_surf = self.screen
+            self._display_surf   = self.screen
             self._scale_to_display = False
-        self._phys_w = phys_w
-        self._phys_h = phys_h
+        self._phys_w = disp_w
+        self._phys_h = disp_h
         pygame.display.set_caption("Arcade Control")
 
         # Helper: scale a design font-size to the render resolution

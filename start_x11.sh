@@ -10,8 +10,11 @@ if [[ -n "$DISPLAY" ]]; then
     echo "Desktop mode: running directly"
     python3 "$SCRIPT_DIR/src/main.py"
 else
-    # Console mode (Raspberry Pi) - start X server.
-    # Rotation is handled by display_rotate=1 in /boot/firmware/config.txt at the
-    # KMS level, so no xrandr rotation is needed here.
-    xinit /usr/bin/python3 "$SCRIPT_DIR/src/main.py" -- :0 vt1 -nocursor
+    # Console mode (Raspberry Pi).
+    # Set X11 virtual framebuffer to 640x360 so the VC4 hardware scaler
+    # upscales to 1920x1080 for free — no CPU-side transform.scale needed.
+    xinit /bin/bash -c "
+        xrandr --fb 640x360 2>/dev/null || true
+        exec /usr/bin/python3 '$SCRIPT_DIR/src/main.py'
+    " -- :0 vt1 -nocursor
 fi
