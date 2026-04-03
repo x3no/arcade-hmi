@@ -395,12 +395,10 @@ class ArcadeControlApp:
         self.config = Config()
         
         # Screen setup
-        # On Pi: start_x11.sh runs:
-        #   xrandr --output HDMI-1 --rotate normal --scale-from 640x360
-        # --rotate normal clears X11 rotation (KMS handles it via kernel cmdline).
-        # --scale-from 640x360 makes VC4 upscale 640x360 to 1920x1080 in HW.
-        # pygame then renders directly at 640x360 with no CPU transform.scale.
-        # Fallback: xrandr fails → SW scale (transform.scale each frame).
+        # On Pi: start_x11.sh tries xrandr --scale-from 640x360 (VC4 HW upscale).
+        # If it succeeds ARCADE_HW_SCALE=1 is exported and we render directly at
+        # 640x360 — no CPU transform.scale in the loop.
+        # Fallback: display reports 1920x1080 → manual SW scale each frame.
         _info = pygame.display.Info()
         if _info.current_w > 0 and _info.current_h > 0:
             disp_w, disp_h = _info.current_w, _info.current_h
@@ -416,15 +414,22 @@ class ArcadeControlApp:
         _hw_scale = os.environ.get('ARCADE_HW_SCALE') == '1'
 
         if IS_PI or _force_scale:
-            flags = pygame.FULLSCREEN | pygame.DOUBLEBUF
             if _hw_scale:
-                # xrandr set virtual screen to 640x360; render direct to it.
-                self.screen = pygame.display.set_mode((self.width, self.height), flags, vsync=1)
+                # xrandr --scale-from maps top-left 640x360 of the virtual FB to
+                # 1920x1080 on hardware. Open a borderless window at (0,0) exactly
+                # filling that region — SDL2 renders direct, no CPU scale.
+                os.environ['SDL_VIDEO_WINDOW_POS'] = '0,0'
+                self.screen = pygame.display.set_mode(
+                    (self.width, self.height),
+                    pygame.NOFRAME | pygame.DOUBLEBUF,
+                    vsync=1
+                )
                 self._display_surf   = self.screen
                 self._scale_to_display = False
                 print(f"Render: {self.width}x{self.height} via VC4 HW scaler")
             else:
-                # SW scale fallback: render at 640x360, scale to 1920x1080 each frame
+                # SW scale fallback
+                flags = pygame.FULLSCREEN | pygame.DOUBLEBUF
                 self._display_surf = pygame.display.set_mode((disp_w, disp_h), flags, vsync=1)
                 self.screen = pygame.Surface((self.width, self.height)).convert()
                 self._scale_to_display = True

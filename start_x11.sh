@@ -11,13 +11,12 @@ if [[ -n "$DISPLAY" ]]; then
     python3 "$SCRIPT_DIR/src/main.py"
 else
     # Console mode (Raspberry Pi).
-    # --rotate normal clears any X11 rotation (KMS handles it via kernel cmdline)
-    # so --scale-from 640x360 applies a clean 3x3 scale in logical space.
-    # If xrandr succeeds, ARCADE_HW_SCALE=1 tells pygame to render at 640x360
-    # directly (VC4 upscales to 1920x1080 for free, no CPU transform.scale).
+    # --scale-from 640x360: VC4 maps the top-left 640x360 of the virtual
+    # framebuffer to 1920x1080 in hardware. The app opens a borderless window
+    # at (0,0) exactly filling that region — no CPU transform.scale needed.
     xinit /bin/bash -c "
         sleep 1
-        if xrandr --output HDMI-1 --rotate normal --scale-from 640x360 2>/dev/null; then
+        if xrandr --output HDMI-1 --scale-from 640x360 2>/dev/null; then
             export ARCADE_HW_SCALE=1
         fi
         exec /usr/bin/python3 '$SCRIPT_DIR/src/main.py'
