@@ -736,9 +736,9 @@ class BTKeyboardServer:
                 # Serialized sending over L2CAP socket with short delays
                 # to ensure host can differentiate press and release events clearly
                 intr.send(press)
-                time.sleep(0.015)
+                time.sleep(0.045)  # 45ms hold time (avoids host OS anti-bounce filters)
                 intr.send(release)
-                time.sleep(0.010)
+                time.sleep(0.025)  # 25ms cool-down before next key
                 return True
             except OSError as e:
                 log.warning(f'send_key failed: {e}')
