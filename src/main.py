@@ -2026,7 +2026,7 @@ class ArcadeControlApp:
             else:
                 self.draw_main_screen()
 
-            self.clock.tick(30)
+            self.clock.tick(60)
 
             # FPS counter — prints every 3 seconds
             _fps_frames += 1
