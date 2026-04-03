@@ -405,7 +405,10 @@ class ArcadeControlApp:
         else:
             flags = 0
         self.screen = pygame.display.set_mode((self.width, self.height), flags, vsync=1)
-        print("Display created successfully")
+        print(f"Display created: surface={self.screen.get_size()}  flags={flags:#010x}")
+        print(f"  desktop_sizes={pygame.display.get_desktop_sizes()}")
+        _info2 = pygame.display.Info()
+        print(f"  display.Info after set_mode: {_info2.current_w}x{_info2.current_h}")
         pygame.display.set_caption("Arcade Control")
 
         # Helper: scale a design font-size to the render resolution
