@@ -460,10 +460,10 @@ class ArcadeControlApp:
         try:
             font_path = os.path.join(os.path.dirname(__file__), 'fonts', 'Rajdhani-Bold.ttf')
             self.font_tab  = pygame.font.Font(font_path, _fs(42))
-            self.font_slot = pygame.font.Font(font_path, _fs(30))
+            self.font_slot = pygame.font.Font(font_path, _fs(48)) # Increased font size for slots
         except:
             self.font_tab  = pygame.font.Font(None, _fs(42))
-            self.font_slot = pygame.font.Font(None, _fs(30))
+            self.font_slot = pygame.font.Font(None, _fs(48))
 
         # Monospace font for clock — bundled with the project
         try:
@@ -577,10 +577,10 @@ class ArcadeControlApp:
         # Layout constants
         GAP      = _s(4)
         TAB_Y    = _s(90)
-        TAB_H    = _s(140)
+        TAB_H    = _s(160)
         TAB_W    = (self.width - GAP * 3) // 4   # 4 tabs with 3 gaps between
         SLOT_Y   = TAB_Y + TAB_H + _s(10)
-        SLOT_H   = _s(130)
+        SLOT_H   = _s(180)
         SLOT_W   = (self.width - GAP * 9) // 10  # 10 items (GENERAL + 1-9) with 9 gaps
         CONT_Y   = TAB_Y + TAB_H        # non-Partida content starts here
         CONT_Y_P = SLOT_Y + SLOT_H      # Partida content starts here
@@ -605,13 +605,15 @@ class ArcadeControlApp:
         ]
 
         # Slot sub-tabs: GENERAL first, then 1-9
-        slot_labels = ['GENERAL'] + [str(i) for i in range(1, 10)]
+        # \ue8b8 is settings, \ue30f is gamepad setting, \ue88e is info, \ue5d2 is menu
+        slot_labels = [('', '\ue8b8')] + [(str(i), None) for i in range(1, 10)]
         self.slot_buttons = [
             TabButton(
                 (i * (SLOT_W + GAP), SLOT_Y, SLOT_W, SLOT_H),
-                label,
+                text=label[0],
                 active=(i == self.current_slot),
                 action=lambda s=i: self.switch_slot(s),
+                icon=label[1],
                 style='box',
             )
             for i, label in enumerate(slot_labels)
@@ -1667,7 +1669,7 @@ class ArcadeControlApp:
 
         if self.current_tab == 'partida':
             for btn in self.slot_buttons:
-                btn.draw(s, self.font_slot)
+                btn.draw(s, self.font_slot, self.font_icon)
 
         # Scroll menu is NOT drawn into the cache — it is drawn live every frame
         # so that scroll_x changes are visible immediately without cache invalidation.
