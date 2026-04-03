@@ -1965,7 +1965,7 @@ class ArcadeControlApp:
             else:
                 self.draw_main_screen()
 
-            self.clock.tick(30)
+            self.clock.tick(60)
             
         self.cleanup()
         
