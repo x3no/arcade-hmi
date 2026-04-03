@@ -388,6 +388,158 @@ class ScrollMenu:
         surface.set_clip(clip)
 
 
+class VolumeSlider:
+    """Touch-friendly horizontal volume slider that sends to LAN API.
+
+    Sending strategy: a single background thread reads `_pending_vol` and
+    sends it.  The main thread always overwrites `_pending_vol` with the
+    latest dragged value — intermediate positions that arrive while the
+    HTTP request is in flight are automatically discarded (no queue).
+    """
+
+    _TRACK_H = max(1, int(20 * RS))
+    _THUMB_R = max(4, int(26 * RS))
+
+    def __init__(self, rect, app):
+        self.rect     = pygame.Rect(rect)
+        self._app     = app
+        self._dragging   = False
+        self._drag_val   = None      # 0–100 while finger is touching
+        self._pending_vol = None     # latest value waiting to be sent
+        self._sending    = False
+        self._user_vol   = None      # authoritative value; cleared when server confirms
+        self._start_sender()
+
+    def _start_sender(self):
+        import threading
+        def _loop():
+            import time as _t, json, urllib.request
+            while True:
+                val = self._pending_vol
+                if val is not None and self._app.lan_pc_ip:
+                    self._pending_vol = None
+                    self._sending = True
+                    try:
+                        body = json.dumps({'volume': val}).encode()
+                        req = urllib.request.Request(
+                            f"http://{self._app.lan_pc_ip}:5000/vol",
+                            data=body,
+                            headers={'Content-Type': 'application/json'},
+                            method='POST',
+                        )
+                        with urllib.request.urlopen(req, timeout=1.5) as resp:
+                            res = json.loads(resp.read())
+                            confirmed_vol = res.get('volume', self._app.lan_volume)
+                            self._app.lan_mute = res.get('mute', self._app.lan_mute)
+                            self._app._main_cache_dirty = True
+                            if self._user_vol is not None:
+                                # Solo aceptar la respuesta si confirma el valor del usuario.
+                                # Respuestas de POSTs anteriores (durante el arrastre) se ignoran.
+                                if confirmed_vol == self._user_vol:
+                                    self._app.lan_volume = confirmed_vol
+                                    self._user_vol = None
+                            else:
+                                self._app.lan_volume = confirmed_vol
+                    except Exception:
+                        pass
+                    self._sending = False
+                _t.sleep(0.02)
+        threading.Thread(target=_loop, daemon=True).start()
+
+    @property
+    def _display_vol(self):
+        if self._drag_val is not None:
+            return self._drag_val
+        if self._user_vol is not None:
+            return self._user_vol
+        return self._app.lan_volume
+
+    def _vol_from_x(self, x):
+        pad   = max(1, int(30 * RS))
+        left  = self.rect.left  + pad
+        right = self.rect.right - pad
+        return max(0, min(100, int((x - left) * 100 / max(1, right - left))))
+
+    def handle_event(self, event):
+        if not self._app.lan_connected:
+            return False
+        if event.type == MOUSEBUTTONDOWN and self.rect.collidepoint(event.pos):
+            self._dragging = True
+            self._drag_val = self._vol_from_x(event.pos[0])
+            self._pending_vol = self._drag_val
+            self._user_vol = self._drag_val
+            self._app._main_cache_dirty = True
+            return True
+        if event.type == MOUSEMOTION and self._dragging:
+            self._drag_val = self._vol_from_x(event.pos[0])
+            self._pending_vol = self._drag_val
+            self._user_vol = self._drag_val
+            self._app._main_cache_dirty = True
+            return True
+        if event.type == MOUSEBUTTONUP and self._dragging:
+            if self._drag_val is not None:
+                self._user_vol = self._drag_val
+                self._app.lan_volume = self._drag_val
+            self._dragging = False
+            self._drag_val = None
+            return True
+        return False
+
+    def draw(self, surface, font):
+        if not self._app.lan_connected:
+            return
+
+        muted = self._app.lan_mute
+        vol   = self._display_vol
+
+        pad   = max(1, int(30 * RS))
+        cx    = self.rect.centerx
+        cy    = self.rect.centery  + max(1, int(8 * RS))   # nudge down to leave label room
+        left  = self.rect.left  + pad
+        right = self.rect.right - pad
+        tw    = right - left
+        th    = self._TRACK_H
+        tr    = self._THUMB_R
+
+        # Track background
+        pygame.draw.rect(surface, (50, 50, 50),
+                         (left, cy - th // 2, tw, th),
+                         border_radius=th // 2)
+        # Filled portion — color interpolates green→orange→red by volume level
+        def _vol_color(v):
+            if v <= 20:
+                # green (0,200,80) constant for low volumes
+                return (0, 200, 80)
+            elif v <= 50:
+                # green → orange across 20..50
+                t = (v - 20) / 30
+                return (int(0   + 255 * t), int(200 - 60 * t), int(80 - 80 * t))
+            else:
+                # orange → red across 50..100
+                t = (v - 50) / 50
+                return (255, int(140 - 140 * t), 0)
+
+        if not muted and vol > 0:
+            fw = max(1, int(tw * vol / 100))
+            pygame.draw.rect(surface, _vol_color(vol),
+                             (left, cy - th // 2, fw, th),
+                             border_radius=th // 2)
+        # Thumb
+        tx = left + int(tw * vol / 100)
+        c_thumb = (100, 100, 100) if muted else _vol_color(vol)
+        pygame.draw.circle(surface, c_thumb, (tx, cy), tr)
+        pygame.draw.circle(surface, C_WHITE,  (tx, cy), tr, max(1, int(2 * RS)))
+
+        # Label
+        if muted:
+            label, lc = "SILENCIADO", (120, 120, 120)
+        else:
+            label, lc = f"{vol}%", C_WHITE
+        txt = _rt(font, label, lc)
+        surface.blit(txt, txt.get_rect(centerx=cx,
+                                       bottom=cy - th // 2 - max(1, int(4 * RS))))
+
+
 class ArcadeControlApp:
     """Main application class"""
     
@@ -538,7 +690,9 @@ class ArcadeControlApp:
         self.lan_connected = False
         self.lan_volume = 0
         self.lan_mute = False
-        self.lan_game_status = None
+        self.lan_is_game_running = False
+        self.lan_is_menu_running = False
+        self.lan_game_title = None
         self.lan_game_image_bytes = None  # Buffer crudo para convertir en thread principal
         self.lan_game_image_surf = None   # Pygame surface de la captura en vivo
         
@@ -649,6 +803,15 @@ class ArcadeControlApp:
         h_norm = self.height - CONT_Y - CLOCK_H
         h_part = self.height - CONT_Y_P - CLOCK_H
 
+        # ── Volume slider geometry (sonido tab only) ─────────────────────────
+        # h_sonido leaves room below buttons for the slider within the content area.
+        SLIDER_H = _s(150)
+        h_sonido = h_norm - SLIDER_H - _s(10)
+        SLIDER_Y = CONT_Y + h_sonido + _s(8)
+        self.volume_slider = VolumeSlider(
+            (_s(16), SLIDER_Y, self.width - _s(32), SLIDER_H), self
+        )
+
         self.partida_general_btns = [
             SimpleButton((0,0,0,0), "PAUSAR",       action=self.pause_game,    icon='\ue034', disabled=True),
             SimpleButton((0,0,0,0), "INFO",         action=self.game_info,     icon='\ue88e', disabled=True),
@@ -681,22 +844,28 @@ class ArcadeControlApp:
                 SimpleButton((0,0,0,0), "UPDATE",       action=self.update_confirm,    icon='\ue923'),  # system_update
                 SimpleButton((0,0,0,0), "BLUETOOTH",    action=self.open_bt_screen,    icon='\ue1a8'),  # bluetooth
             ]),
-            'sonido':   make_scroll(CONT_Y, h_norm, [
+            'sonido':   make_scroll(CONT_Y, h_sonido, [
                 SimpleButton((0,0,0,0), "VOL +", action=self.volume_up,   icon='\ue050', hold_action=self.volume_up,   disabled=True),
                 SimpleButton((0,0,0,0), "VOL -", action=self.volume_down, icon='\ue04d', hold_action=self.volume_down, disabled=True),
-                SimpleButton((0,0,0,0), "MUTE",  action=self.mute,        icon='\ue04f',                               disabled=True),
+                SimpleButton((0,0,0,0), "SILENCIAR", action=self.mute,    icon='\ue04f',                               disabled=True),
             ]),
             'monedero': make_scroll(CONT_Y, h_norm, [
                 SimpleButton((0,0,0,0), "COIN P1", action=self.coin_p1, icon='\ue227', disabled=True),
                 SimpleButton((0,0,0,0), "COIN P2", action=self.coin_p2, icon='\ue227', disabled=True),
             ]),
         }
-            
+
+        # Keep explicit references for sonido buttons so we can update them
+        # independently from the general bt_action_btns disable logic.
+        self.vol_up_btn   = self.tab_scroll_menus['sonido'].buttons[0]
+        self.vol_down_btn = self.tab_scroll_menus['sonido'].buttons[1]
+        self.mute_btn     = self.tab_scroll_menus['sonido'].buttons[2]
+        self.sonido_btns  = [self.vol_up_btn, self.vol_down_btn, self.mute_btn]
+
         # Collect all buttons that require an active BT connection
         self.bt_action_btns = (
             self.partida_general_btns
             + self.partida_slot_btns
-            + self.tab_scroll_menus['sonido'].buttons
             + self.tab_scroll_menus['monedero'].buttons
         )
 
@@ -1155,6 +1324,8 @@ class ArcadeControlApp:
         import threading
         def _poll():
             import time as _t, socket, json, urllib.request
+            _consecutive_fails = 0
+            _MAX_FAILS = 3  # fallos consecutivos antes de marcar desconexión
             while True:
                 if not self.lan_pc_ip:
                     # UDP Broadcast
@@ -1162,15 +1333,116 @@ class ArcadeControlApp:
                     s.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
                     s.settimeout(2.0)
                     try:
-                        s.sendto(b"ARCADE_DISCOVER", ("255.255.255.255", 50019))
+                        print("[LAN] 🔍 Iniciando búsqueda UDP de PC Arcade...")
+                        # Prueba 1: Global
+                        try:
+                            s.sendto(b"ARCADE_DISCOVER", ("255.255.255.255", 50019))
+                            print("  -> Broadcast global (255.255.255.255) enviado")
+                        except OSError as e:
+                            print(f"  -> Error broadcast global: {e}")
+                            
+                        # Prueba 2: Fallback subred actual (si es un portátil con Wi-Fi)
+                        try:
+                            import subprocess
+                            out = subprocess.check_output("ip -4 addr show | grep inet", shell=True).decode()
+                            for line in out.splitlines():
+                                if 'brd' in line:
+                                    bcast = line.split('brd')[1].split()[0].strip()
+                                    if '172.' not in bcast and '127.' not in bcast:
+                                        s.sendto(b"ARCADE_DISCOVER", (bcast, 50019))
+                                        print(f"  -> Broadcast específico IP route ({bcast}) enviado")
+                        except Exception:
+                            # Ignorado, no está el comando IP disponible
+                            s.sendto(b"ARCADE_DISCOVER", ("<broadcast>", 50019))
+                            print("  -> Broadcast genérico (<broadcast>) enviado")
+                            
+                        # Prueba 3: Fuerza bruta a subredes de casa clásicas (192.168.1.255 / 192.168.0.255)
+                        try: s.sendto(b"ARCADE_DISCOVER", ("192.168.1.255", 50019))
+                        except Exception: pass
+                        try: s.sendto(b"ARCADE_DISCOVER", ("192.168.0.255", 50019))
+                        except Exception: pass
+
                         data, addr = s.recvfrom(1024)
                         if data == b"ARCADE_PC_HERE":
+                            print(f"[LAN] ✅ ¡PC ENCONTRADO! IP: {addr[0]}")
                             self.lan_pc_ip = addr[0]
                             self.lan_connected = True
                             self._main_cache_dirty = True
-                    except Exception:
-                        self.lan_connected = False
-                        self._main_cache_dirty = True
+                            try:
+                                req_s = urllib.request.Request(f"http://{self.lan_pc_ip}:5000/vol", method="GET")
+                                with urllib.request.urlopen(req_s, timeout=2.0) as resp_s:
+                                    d = json.loads(resp_s.read().decode())
+                                    self.lan_volume = d.get('volume', 0)
+                                    self.lan_mute   = d.get('mute', False)
+                                    self._main_cache_dirty = True
+                            except Exception:
+                                pass
+                    except Exception as e:
+                        if "timed out" in str(e):
+                            print("[LAN] ❌ UDP agotado. Iniciando escaneo TCP de Fuerza Bruta en puerto 5000...")
+                            # --- BRUTE FORCE TCP ---
+                            found_ip = None
+                            try:
+                                import concurrent.futures
+                                import socket as _sock
+                                
+                                def _check_ip(ip):
+                                    # Hacemos un ping TCP rápido al puerto 5000 (Flask)
+                                    with _sock.socket(_sock.AF_INET, _sock.SOCK_STREAM) as tcp_s:
+                                        tcp_s.settimeout(0.3)
+                                        if tcp_s.connect_ex((ip, 5000)) == 0:
+                                            return ip
+                                    return None
+
+                                # Sacar la IP local para saber qué subred barrer (ej: 192.168.1)
+                                base_ip = "192.168.1"
+                                try:
+                                    import subprocess
+                                    out = subprocess.check_output("ip -4 addr show | grep inet", shell=True).decode()
+                                    for line in out.splitlines():
+                                        if 'brd' in line:
+                                            ip_full = line.split()[1].split('/')[0]
+                                            if not ip_full.startswith('127') and not ip_full.startswith('172'):
+                                                base_ip = ip_full.rsplit('.', 1)[0]
+                                                break
+                                except Exception: pass
+                                
+                                print(f"[LAN] -> Barriendo IPs masivamente: {base_ip}.2 hasta {base_ip}.254")
+                                ips_to_check = [f"{base_ip}.{i}" for i in range(2, 255)]
+                                
+                                # Escanear 50 IPs a la vez en paralelo
+                                with concurrent.futures.ThreadPoolExecutor(max_workers=50) as executor:
+                                    for result in executor.map(_check_ip, ips_to_check):
+                                        if result:
+                                            found_ip = result
+                                            # (concurrent.futures terminará los demás hilos rápido en background)
+                                            break
+                            except Exception as ex: 
+                                print(f"[LAN] Fallo en fuerza bruta: {ex}")
+                                
+                            if found_ip:
+                                print(f"[LAN] ✅ ¡PC ENCONTRADO POR FUERZA BRUTA TCP! IP: {found_ip}")
+                                self.lan_pc_ip = found_ip
+                                self.lan_connected = True
+                                self._main_cache_dirty = True
+                                try:
+                                    req_s = urllib.request.Request(f"http://{self.lan_pc_ip}:5000/vol", method="GET")
+                                    with urllib.request.urlopen(req_s, timeout=2.0) as resp_s:
+                                        d = json.loads(resp_s.read().decode())
+                                        self.lan_volume = d.get('volume', 0)
+                                        self.lan_mute   = d.get('mute', False)
+                                        self._main_cache_dirty = True
+                                except Exception:
+                                    pass
+                            else:
+                                print("[LAN] 🛑 Escaneo completo. Nadie tiene el puerto 5000 abierto.")
+                        else:
+                            print(f"[LAN] ❌ Excepción de red: {e}")
+                            
+                        # Si tras UDP y TCP no hay suerte, reseteamos UI
+                        if not self.lan_pc_ip:
+                            self.lan_connected = False
+                            self._main_cache_dirty = True
                     finally:
                         s.close()
                     _t.sleep(5)
@@ -1180,25 +1452,45 @@ class ArcadeControlApp:
                         req_vol = urllib.request.Request(f"http://{self.lan_pc_ip}:5000/vol", method="GET")
                         with urllib.request.urlopen(req_vol, timeout=2.0) as resp:
                             data = json.loads(resp.read().decode())
-                            if self.lan_volume != data.get('volume') or self.lan_mute != data.get('mute'):
-                                self.lan_volume = data.get('volume', 0)
-                                self.lan_mute = data.get('mute', False)
+                            slider = self.volume_slider
+                            srv_vol  = data.get('volume', 0)
+                            srv_mute = data.get('mute', False)
+                            if slider._user_vol is not None:
+                                # El usuario tiene un valor autoritativo no confirmado.
+                                # Si el servidor devuelve algo distinto, re-enviamos.
+                                if srv_vol != slider._user_vol:
+                                    slider._pending_vol = slider._user_vol
+                                if self.lan_mute != srv_mute:
+                                    self.lan_mute = srv_mute
+                                    self._main_cache_dirty = True
                                 self.lan_connected = True
-                                self._main_cache_dirty = True
-                                
+                            else:
+                                if self.lan_volume != srv_vol or self.lan_mute != srv_mute:
+                                    self.lan_volume = srv_vol
+                                    self.lan_mute = srv_mute
+                                    self.lan_connected = True
+                                    self._main_cache_dirty = True
                         req_game = urllib.request.Request(f"http://{self.lan_pc_ip}:5000/game", method="GET")
                         with urllib.request.urlopen(req_game, timeout=2.0) as resp:
                             data = json.loads(resp.read().decode())
-                            new_game = data.get('game')
-                            if new_game and len(new_game) > 30:
-                                new_game = new_game[:27] + "..."
-                            if self.lan_game_status != new_game:
-                                self.lan_game_status = new_game
+                            new_running = data.get('is_game_running', False)
+                            new_menu = data.get('is_menu_running', False)
+                            new_title = data.get('game')
+                            
+                            if new_title and len(new_title) > 30:
+                                new_title = new_title[:27] + "..."
+                                
+                            if (self.lan_is_game_running != new_running or 
+                                self.lan_is_menu_running != new_menu or 
+                                self.lan_game_title != new_title):
+                                self.lan_is_game_running = new_running
+                                self.lan_is_menu_running = new_menu
+                                self.lan_game_title = new_title
                                 self.lan_connected = True
                                 self._main_cache_dirty = True
                                 
-                        # Si hay un juego, pedir la captura de pantalla en vivo
-                        if self.lan_game_status and self.lan_game_status != "Ningún juego en ejecución" and self.current_tab == 'partida':
+                        # Si hay un juego o menú, pedir la captura de pantalla en vivo
+                        if (self.lan_is_game_running or self.lan_is_menu_running) and self.current_tab == 'partida':
                             try:
                                 req_img = urllib.request.Request(f"http://{self.lan_pc_ip}:5000/game/preview", method="GET")
                                 with urllib.request.urlopen(req_img, timeout=2.0) as resp:
@@ -1208,13 +1500,20 @@ class ArcadeControlApp:
                             except Exception:
                                 pass
 
+                        _consecutive_fails = 0  # petición exitosa
                         _t.sleep(2)
-                    except Exception:
-                        self.lan_pc_ip = None
-                        self.lan_connected = False
-                        self.lan_game_status = None
-                        self._main_cache_dirty = True
-                        _t.sleep(5)
+                    except Exception as _e:
+                        _consecutive_fails += 1
+                        print(f'[LAN] ⚠️  Fallo #{_consecutive_fails}/{_MAX_FAILS}: {_e}')
+                        if _consecutive_fails >= _MAX_FAILS:
+                            self.lan_pc_ip = None
+                            self.lan_connected = False
+                            self.lan_is_game_running = False
+                            self.lan_is_menu_running = False
+                            self.lan_game_title = None
+                            self._main_cache_dirty = True
+                            _consecutive_fails = 0
+                        _t.sleep(2)
         t = threading.Thread(target=_poll, daemon=True)
         t.start()
 
@@ -1793,6 +2092,19 @@ class ArcadeControlApp:
         for btn in self.bt_action_btns:
             btn.disabled = not self.bt_connected
 
+        # Sonido buttons are usable via BT *or* LAN
+        lan_or_bt = self.bt_connected or self.lan_connected
+        for btn in self.sonido_btns:
+            btn.disabled = not lan_or_bt
+
+        # Mute button reflects current audio state
+        if self.lan_mute:
+            self.mute_btn.text = "DESILENCIAR"
+            self.mute_btn.icon = '\ue050'   # volume_up
+        else:
+            self.mute_btn.text = "SILENCIAR"
+            self.mute_btn.icon = '\ue04f'   # volume_off
+
         for btn in self.tab_buttons:
             btn.draw(s, self.font_tab, self.font_icon)
 
@@ -1824,6 +2136,11 @@ class ArcadeControlApp:
         menu = self._active_scroll_menu()
         pygame.draw.rect(self.screen, C_BG, menu.rect)
         menu.draw(self.screen, self.font_action, self.font_icon_action)
+
+        # Volume slider — drawn live below the sonido scroll menu
+        if self.current_tab == 'sonido':
+            pygame.draw.rect(self.screen, C_BG, self.volume_slider.rect)
+            self.volume_slider.draw(self.screen, self.font_mono)
 
         # ── Top status bar (always repainted — clock ticks every second) ────────
         BAR_CY  = _s(44)
@@ -1869,8 +2186,11 @@ class ArcadeControlApp:
         self.screen.blit(coin_surf, coin_surf.get_rect(midleft=(MARGIN, BAR_BOT_CY)))
 
         # Current Game - center (only if known via LAN)
-        if self.lan_game_status and self.lan_game_status != "None":
-            game_surf = _rt(self.font_mono, f"JUGANDO: {self.lan_game_status}", (255, 165, 0))
+        if self.lan_is_game_running and self.lan_game_title:
+            game_surf = _rt(self.font_mono, f"JUGANDO: {self.lan_game_title}", (255, 165, 0))
+            self.screen.blit(game_surf, game_surf.get_rect(center=(self.width // 2, BAR_BOT_CY)))
+        elif self.lan_is_menu_running:
+            game_surf = _rt(self.font_mono, "NAVEGANDO EN MENÚ", (0, 210, 100))
             self.screen.blit(game_surf, game_surf.get_rect(center=(self.width // 2, BAR_BOT_CY)))
 
         # Dibujar Live Preview si estamos en la tab "Partida" y tenemos imagen cacheada
@@ -2147,7 +2467,11 @@ class ArcadeControlApp:
                                 if btn.handle_event(event):
                                     break
                     # Scrollable content (handles all mouse events incl. motion)
-                    self._active_scroll_menu().handle_event(event)
+                    # On sonido tab, let the volume slider grab touch inside its rect first
+                    if self.current_tab == 'sonido' and self.volume_slider.handle_event(event):
+                        pass  # slider consumed the event
+                    else:
+                        self._active_scroll_menu().handle_event(event)
 
                         
     def run(self):

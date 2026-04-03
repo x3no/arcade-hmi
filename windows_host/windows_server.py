@@ -52,9 +52,9 @@ def handle_vol():
             if 'action' in data:
                 current = vol.GetMasterVolumeLevelScalar()
                 if data['action'] == 'up':
-                    vol.SetMasterVolumeLevelScalar(min(1.0, current + 0.05), None)
+                    vol.SetMasterVolumeLevelScalar(min(1.0, current + 0.02), None)
                 elif data['action'] == 'down':
-                    vol.SetMasterVolumeLevelScalar(max(0.0, current - 0.05), None)
+                    vol.SetMasterVolumeLevelScalar(max(0.0, current - 0.02), None)
                 elif data['action'] == 'mute':
                     vol.SetMute(not vol.GetMute(), None)
             else:
@@ -95,11 +95,11 @@ def get_current_arcade_game():
         if "RetroArch" in title and "-" in title:
             partes = title.split("-")
             if len(partes) >= 2:
-                return partes[-1].strip()
+                return {"is_game_running": True, "is_menu_running": False, "game": partes[-1].strip()}
         elif "Big Box" in title or "LaunchBox" in title:
-            return "Navegando en Menú (BigBox)"
+            return {"is_game_running": False, "is_menu_running": True, "game": None}
             
-    return "Ningún juego en ejecución"
+    return {"is_game_running": False, "is_menu_running": False, "game": None}
 
 def query_retroarch_udp(cmd, timeout=0.15):
     """Envía un comando UDP a RetroArch y espera una respuesta."""
@@ -172,7 +172,7 @@ def get_retroarch_advanced_info():
 
 @app.route('/game', methods=['GET'])
 def get_game_status():
-    return jsonify({"game": get_current_arcade_game()})
+    return jsonify(get_current_arcade_game())
 
 @app.route('/game/info', methods=['GET'])
 def get_game_advanced_info():
