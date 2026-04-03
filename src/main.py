@@ -405,7 +405,7 @@ class ArcadeControlApp:
             flags = pygame.FULLSCREEN | pygame.DOUBLEBUF
             self._display_surf = pygame.display.set_mode((phys_w, phys_h), flags, vsync=1)
             # Canvas = small render target (640×360); drawn here, then scaled up
-            self.screen = pygame.Surface((self.width, self.height))
+            self.screen = pygame.Surface((self.width, self.height)).convert()
             self._scale_to_display = True
         else:
             flags = 0
@@ -1710,7 +1710,7 @@ class ArcadeControlApp:
         """Draw main control interface — skips render if nothing changed."""
         now_s    = datetime.now(ZoneInfo('Europe/Madrid')).second
         menu     = self._active_scroll_menu()
-        scrolling = abs(menu.velocity) > 0.05
+        scrolling = menu.dragging or abs(menu.velocity) > 0.05
         if not (self._main_cache_dirty or scrolling or now_s != self._prev_second):
             return
         self._prev_second = now_s
@@ -1895,8 +1895,8 @@ class ArcadeControlApp:
                 if self._scale_to_display:
                     sx = event.pos[0] * self.width  // self._phys_w
                     sy = event.pos[1] * self.height // self._phys_h
-                    event = event.__class__(event.type,
-                                           dict(event.__dict__, pos=(sx, sy)))
+                    event = pygame.event.Event(event.type,
+                                               {**event.__dict__, 'pos': (sx, sy)})
                 # If dialog is open, fire action immediately on MOUSEBUTTONDOWN
                 if self.confirmation_dialog:
                     if event.type == MOUSEBUTTONDOWN and hasattr(self, 'dialog_yes_btn'):
@@ -1993,7 +1993,7 @@ class ArcadeControlApp:
             else:
                 self.draw_main_screen()
 
-            self.clock.tick(60)
+            self.clock.tick(30)
             
         self.cleanup()
         
