@@ -1715,7 +1715,7 @@ class ArcadeControlApp:
             return
         self._prev_second = now_s
         self.draw_main_screen_base()
-        self._present()
+        self._present(fast=scrolling)
 
     def open_debug(self):
         self.debug_screen = True
@@ -1997,10 +1997,18 @@ class ArcadeControlApp:
             
         self.cleanup()
         
-    def _present(self):
-        """Upscale canvas to display surface and flip."""
+    def _present(self, fast=False):
+        """Upscale canvas to display surface and flip.
+        fast=True  → nearest-neighbour scale (scroll/drag: speed > quality)
+        fast=False → bilinear smoothscale   (idle: quality > speed)
+        """
         if self._scale_to_display:
-            pygame.transform.scale(self.screen, (self._phys_w, self._phys_h), self._display_surf)
+            if fast:
+                pygame.transform.scale(self.screen, (self._phys_w, self._phys_h),
+                                       self._display_surf)
+            else:
+                pygame.transform.smoothscale(self.screen, (self._phys_w, self._phys_h),
+                                             self._display_surf)
         pygame.display.flip()
 
     def cleanup(self):
