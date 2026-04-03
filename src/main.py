@@ -387,10 +387,10 @@ class ArcadeControlApp:
         self.config = Config()
         
         # Screen setup
-        # On Pi: render at one-third native resolution; SDL2 SCALED + GPU upscales 3×.
-        # DOUBLEBUF + vsync=1 eliminates tearing.
-        # Auto-detect actual screen resolution so scaling is always correct regardless
-        # of what resolution the monitor negotiated over HDMI.
+        # On Pi: render at RS=1/3 (640×360) then upscale manually to 1920×1080
+        # using pygame.transform.scale each frame. This avoids relying on
+        # pygame.SCALED (which requires the SDL2 renderer and shows a tiny
+        # centered window in software/fkms mode on Pi).
         _info = pygame.display.Info()
         if _info.current_w > 0 and _info.current_h > 0:
             phys_w, phys_h = _info.current_w, _info.current_h
@@ -401,14 +401,20 @@ class ArcadeControlApp:
         self.height = int(phys_h * RS)
         print(f"Render: {self.width}x{self.height}  native: {phys_w}x{phys_h}  RS={RS}")
         if IS_PI or _force_scale:
-            flags = pygame.FULLSCREEN | pygame.SCALED | pygame.DOUBLEBUF
+            # Display surface = full physical resolution, fullscreen
+            flags = pygame.FULLSCREEN | pygame.DOUBLEBUF
+            self._display_surf = pygame.display.set_mode((phys_w, phys_h), flags, vsync=1)
+            # Canvas = small render target (640×360); drawn here, then scaled up
+            self.screen = pygame.Surface((self.width, self.height))
+            self._scale_to_display = True
         else:
             flags = 0
-        self.screen = pygame.display.set_mode((self.width, self.height), flags, vsync=1)
-        print(f"Display created: surface={self.screen.get_size()}  flags={flags:#010x}")
-        print(f"  desktop_sizes={pygame.display.get_desktop_sizes()}")
-        _info2 = pygame.display.Info()
-        print(f"  display.Info after set_mode: {_info2.current_w}x{_info2.current_h}")
+            self.screen = pygame.display.set_mode((self.width, self.height), flags, vsync=1)
+            self._display_surf = self.screen
+            self._scale_to_display = False
+        self._phys_w = phys_w
+        self._phys_h = phys_h
+        print(f"Display created: display={self._display_surf.get_size()}  canvas={self.screen.get_size()}")
         pygame.display.set_caption("Arcade Control")
 
         # Helper: scale a design font-size to the render resolution
@@ -966,7 +972,7 @@ class ArcadeControlApp:
                 _rt(self.font_tab, last_line[:55], C_GRAY).get_rect(
                     center=(self.width // 2, self.height // 2 + _s(20)))
             )
-            pygame.display.flip()
+            self._present()
             self.clock.tick(10)
 
             if pygame.time.get_ticks() - start > 30000:
@@ -991,7 +997,7 @@ class ArcadeControlApp:
         if success:
             l2 = _rt(self.font, "Reiniciando...", C_GRAY)
             self.screen.blit(l2, l2.get_rect(center=(self.width // 2, self.height // 2 + _s(40))))
-        pygame.display.flip()
+        self._present()
         pygame.time.wait(2000)
 
     # ── Bluetooth pairing ─────────────────────────────────────────────────────
@@ -1575,7 +1581,7 @@ class ArcadeControlApp:
             if btn:
                 btn.draw(self.screen, self.font_action, self.font_icon_sm)
 
-        pygame.display.flip()
+        self._present()
     
     def draw_cyberpunk_bg(self):
         pass
@@ -1614,7 +1620,7 @@ class ArcadeControlApp:
     def draw_lock_screen(self):
         """Draw lock screen with numpad"""
         self.draw_lock_screen_base()
-        pygame.display.flip()
+        self._present()
         
     def _rebuild_main_cache(self):
         """Pre-render tab bar and slot sub-tabs into a Surface (NOT the scroll area)."""
@@ -1710,7 +1716,7 @@ class ArcadeControlApp:
             return
         self._prev_second = now_s
         self.draw_main_screen_base()
-        pygame.display.flip()
+        self._present()
 
     def open_debug(self):
         self.debug_screen = True
@@ -1802,7 +1808,7 @@ class ArcadeControlApp:
 
         pygame.draw.line(self.screen, C_GRAY, (_s(20), y + _s(10)), (self.width - _s(20), y + _s(10)), max(1, _s(2)))
         self.debug_close_btn.draw(self.screen, self.font_tab)
-        pygame.display.flip()
+        self._present()
 
     def draw_confirmation_dialog(self):
         if self.locked:
@@ -1873,7 +1879,7 @@ class ArcadeControlApp:
             else:
                 self.screen.blit(text_surf, text_surf.get_rect(center=btn.rect.center))
 
-        pygame.display.flip()
+        self._present()
                     
     def handle_events(self):
         """Handle pygame events"""
@@ -1986,6 +1992,12 @@ class ArcadeControlApp:
             
         self.cleanup()
         
+    def _present(self):
+        """Upscale canvas to display surface and flip."""
+        if self._scale_to_display:
+            pygame.transform.scale(self.screen, (self._phys_w, self._phys_h), self._display_surf)
+        self._present()
+
     def cleanup(self):
         """Cleanup resources"""
         self.gpio.cleanup()
