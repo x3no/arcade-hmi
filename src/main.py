@@ -887,21 +887,20 @@ class ArcadeControlApp:
         GAP      = _s(4)
         TAB_Y    = _s(90)
         TAB_H    = _s(160)
-        TAB_W    = (self.width - GAP * 4) // 5   # 5 tabs with 4 gaps between
+        TAB_W    = (self.width - GAP * 3) // 4   # 4 tabs with 3 gaps between
         SLOT_Y   = TAB_Y + TAB_H + _s(10)
         SLOT_H   = _s(180)
         SLOT_W   = (self.width - GAP * 9) // 10  # 10 items (GENERAL + 1-9) with 9 gaps
         CONT_Y   = TAB_Y + TAB_H        # non-Partida content starts here
         CONT_Y_P = SLOT_Y + SLOT_H      # Partida content starts here
 
-        # Main tab bar (5 tabs)
+        # Main tab bar (4 tabs)
         # Material Icons codepoints (static font, U+E000 range)
         tab_defs = [
             ('sistema',  'SISTEMA',  '\ue30a'),  # computer
             ('sonido',   'SONIDO',   '\ue050'),  # volume_up
-            ('partida',  'PARTIDA',  '\ue30f'),  # gamepad
+            ('partida',  'JUEGO',    '\ue30f'),  # gamepad
             ('raton',    'RATÓN',    '\ue323'),  # mouse
-            ('monedero', 'MONEDERO', '\ue850'),  # account_balance_wallet
         ]
         self.tab_buttons = [
             TabButton(
@@ -914,9 +913,9 @@ class ArcadeControlApp:
             for i, (tid, name, icon) in enumerate(tab_defs)
         ]
 
-        # Slot sub-tabs: GENERAL first, then 1-9
-        # \ue8b8 is settings, \ue30f is gamepad setting, \ue88e is info, \ue5d2 is menu
-        slot_labels = [('', '\ue8b8')] + [(str(i), None) for i in range(1, 10)]
+        # Slot sub-tabs: GENERAL first, MONEDERO second, then 1-8
+        # \ue8b8 is settings, \ue227 is attach_money, \ue30f is gamepad setting, \ue88e is info, \ue5d2 is menu
+        slot_labels = [('', '\ue8b8'), ('$', None)] + [(str(i), None) for i in range(1, 9)]
         self.slot_buttons = [
             TabButton(
                 (i * (SLOT_W + GAP), SLOT_Y, SLOT_W, SLOT_H),
@@ -965,7 +964,12 @@ class ArcadeControlApp:
             SimpleButton((0,0,0,0), "SAVE", action=self.save_state, icon='\ue161', disabled=True),
             SimpleButton((0,0,0,0), "LOAD", action=self.load_state, icon='\ue2c4', disabled=True),
         ]
+        self.partida_monedero_btns = [
+            SimpleButton((0,0,0,0), "MONEDA J1", action=self.coin_p1, icon='\ue227', disabled=True),
+            SimpleButton((0,0,0,0), "MONEDA J2", action=self.coin_p2, icon='\ue227', disabled=True),
+        ]
         self.partida_general_scroll = make_scroll(CONT_Y_P, h_part, self.partida_general_btns)
+        self.partida_monedero_scroll = make_scroll(CONT_Y_P, h_part, self.partida_monedero_btns)
         self.partida_slot_scroll    = make_scroll(CONT_Y_P, h_part, self.partida_slot_btns)
 
         self.power_btn = SimpleButton(
@@ -977,7 +981,7 @@ class ArcadeControlApp:
 
         RATON_Y = CONT_Y + _s(10)
         RATON_H = h_norm - _s(20)
-        btn_height = _s(60)
+        btn_height = _s(120)
         # Touchpad height reduced to fit the buttons below with a small margin
         self._raton_rect = pygame.Rect(_s(20), RATON_Y, self.width - _s(40), RATON_H - btn_height - _s(10))
         
@@ -1002,10 +1006,6 @@ class ArcadeControlApp:
                 SimpleButton((0,0,0,0), "VOL -", action=self.volume_down, icon='\ue04d', hold_action=self.volume_down, disabled=True),
                 SimpleButton((0,0,0,0), "SILENCIAR", action=self.mute,    icon='\ue04f',                               disabled=True),
             ]),
-            'monedero': make_scroll(CONT_Y, h_norm, [
-                SimpleButton((0,0,0,0), "COIN P1", action=self.coin_p1, icon='\ue227', disabled=True),
-                SimpleButton((0,0,0,0), "COIN P2", action=self.coin_p2, icon='\ue227', disabled=True),
-            ]),
             'raton': make_scroll(CONT_Y, h_norm, []),
         }
 
@@ -1020,7 +1020,7 @@ class ArcadeControlApp:
         self.bt_action_btns = (
             self.partida_general_btns
             + self.partida_slot_btns
-            + self.tab_scroll_menus['monedero'].buttons
+            + self.partida_monedero_btns
         )
 
         # Wire cache-invalidation callback into every scroll menu so button
@@ -1029,7 +1029,7 @@ class ArcadeControlApp:
             self._main_cache_dirty = True
 
         all_menus = list(self.tab_scroll_menus.values()) + [
-            self.partida_general_scroll, self.partida_slot_scroll
+            self.partida_general_scroll, self.partida_monedero_scroll, self.partida_slot_scroll
         ]
         for menu in all_menus:
             menu._cache_dirty_ref = _mark_cache_dirty
@@ -1037,12 +1037,17 @@ class ArcadeControlApp:
     def _active_scroll_menu(self):
         """Return the scroll menu for the currently active tab/sub-tab."""
         if self.current_tab == 'partida':
-            return self.partida_general_scroll if self.current_slot == 0 else self.partida_slot_scroll
+            if self.current_slot == 0:
+                return self.partida_general_scroll
+            elif self.current_slot == 1:
+                return self.partida_monedero_scroll
+            else:
+                return self.partida_slot_scroll
         return self.tab_scroll_menus[self.current_tab]
 
     def switch_tab(self, tab_id):
         self.current_tab = tab_id
-        tab_ids = ['sistema', 'sonido', 'partida', 'raton', 'monedero']
+        tab_ids = ['sistema', 'sonido', 'partida', 'raton']
         for btn, tid in zip(self.tab_buttons, tab_ids):
             btn.active = (tid == tab_id)
         self._main_cache_dirty = True
@@ -2341,21 +2346,42 @@ class ArcadeControlApp:
 
         if self.current_tab == 'raton':
             # Draw touchpad background and icon
-            pygame.draw.rect(self.screen, (30, 30, 30), self._raton_rect)
-            pygame.draw.rect(self.screen, (100, 100, 100), self._raton_rect, 2)
+            cr = self._raton_rect
+            c_len = _s(50)
+            c_th = max(3, _s(6))
             
-            icon = self.font_icon.render('\ue323', True, (60, 60, 60)) # mouse icon watermark
-            icon_rect = icon.get_rect(center=self._raton_rect.center)
-            self.screen.blit(icon, icon_rect)
+            # Highlight corners if touchpad is active
+            c_color = C_ORANGE if getattr(self, '_tp_active', False) else (80, 80, 80)
             
-            text = self.font.render("TOUCHPAD ACTIVO (DESLIZA Y PULSA)", True, (100, 100, 100))
-            self.screen.blit(text, text.get_rect(center=(self._raton_rect.centerx, self._raton_rect.centery + 60)))
+            # Top-left corner
+            pygame.draw.rect(self.screen, c_color, (cr.left, cr.top, c_len, c_th))
+            pygame.draw.rect(self.screen, c_color, (cr.left, cr.top, c_th, c_len))
+            # Top-right corner
+            pygame.draw.rect(self.screen, c_color, (cr.right - c_len, cr.top, c_len, c_th))
+            pygame.draw.rect(self.screen, c_color, (cr.right - c_th, cr.top, c_th, c_len))
+            # Bottom-left corner
+            pygame.draw.rect(self.screen, c_color, (cr.left, cr.bottom - c_th, c_len, c_th))
+            pygame.draw.rect(self.screen, c_color, (cr.left, cr.bottom - c_len, c_th, c_len))
+            # Bottom-right corner
+            pygame.draw.rect(self.screen, c_color, (cr.right - c_len, cr.bottom - c_th, c_len, c_th))
+            pygame.draw.rect(self.screen, c_color, (cr.right - c_th, cr.bottom - c_len, c_th, c_len))
             
             # Draw left and right buttons
-            for btn_rect in [getattr(self, '_raton_btn_left_rect', None), getattr(self, '_raton_btn_right_rect', None)]:
-                if btn_rect:
-                    pygame.draw.rect(self.screen, (30, 30, 30), btn_rect)
-                    pygame.draw.rect(self.screen, (100, 100, 100), btn_rect, 2)
+            c = _s(40)
+            
+            lb = getattr(self, '_raton_btn_left_rect', None)
+            if lb:
+                # Left button: solid, notch in bottom-left
+                color_left = C_ORANGE if getattr(self, '_raton_left_pressed', False) else C_DISABLED_BG
+                pts_lb = [(lb.left, lb.top), (lb.right, lb.top), (lb.right, lb.bottom), (lb.left + c, lb.bottom), (lb.left, lb.bottom - c)]
+                pygame.draw.polygon(self.screen, color_left, pts_lb)
+                
+            rb = getattr(self, '_raton_btn_right_rect', None)
+            if rb:
+                # Right button: solid, notch in bottom-right
+                color_right = C_ORANGE if getattr(self, '_raton_right_pressed', False) else C_DISABLED_BG
+                pts_rb = [(rb.left, rb.top), (rb.right, rb.top), (rb.right, rb.bottom - c), (rb.right - c, rb.bottom), (rb.left, rb.bottom)]
+                pygame.draw.polygon(self.screen, color_right, pts_rb)
 
         # ── Top status bar (always repainted — clock ticks every second) ────────
         BAR_CY  = _s(44)
@@ -2373,7 +2399,7 @@ class ArcadeControlApp:
         if self.wifi_connected and self.weather_data:
             wx_str  = f"{self.weather_data['temp']:.0f}°C  {self.weather_data['condition']}"
             wx_surf = _rt(self.font_mono, wx_str, (180, 210, 255))
-            self.screen.blit(wx_surf, wx_surf.get_rect(midleft=(clock_rect.right + _s(22), BAR_CY)))
+            self.screen.blit(wx_surf, wx_surf.get_rect(midleft=(clock_rect.right + _s(60), BAR_CY)))
 
         # Right-side indicators (rendered right→left: BT, HDD, PC, WiFi, LAN)
         DOT_R = _s(7)
@@ -2729,6 +2755,7 @@ class ArcadeControlApp:
                         if event.type == MOUSEBUTTONDOWN:
                             if self._raton_rect.collidepoint(event.pos):
                                 self._tp_active = True
+                                self._main_cache_dirty = True
                                 self._tp_down_time = now
                                 self._tp_moved = False
                                 
@@ -2741,27 +2768,41 @@ class ArcadeControlApp:
                                     
                                 is_tp_event = True
                             elif hasattr(self, "_raton_btn_left_rect") and self._raton_btn_left_rect.collidepoint(event.pos):
+                                self._raton_left_pressed = True
+                                self._main_cache_dirty = True
                                 is_btn_event = True
                                 btn_clicked = 1 # Left click
                             elif hasattr(self, "_raton_btn_right_rect") and self._raton_btn_right_rect.collidepoint(event.pos):
+                                self._raton_right_pressed = True
+                                self._main_cache_dirty = True
                                 is_btn_event = True
                                 btn_clicked = 2 # Right click
                                 
-                        elif getattr(self, "_tp_active", False):
-                            is_tp_event = True
-                            if event.type == MOUSEBUTTONUP:
+                        elif event.type == MOUSEBUTTONUP:
+                            if getattr(self, "_tp_active", False):
+                                is_tp_event = True
                                 self._tp_active = False
+                                self._main_cache_dirty = True
+                            if getattr(self, "_raton_left_pressed", False):
+                                self._raton_left_pressed = False
+                                self._main_cache_dirty = True
+                                is_btn_event = True
+                                btn_clicked = 0
+                            if getattr(self, "_raton_right_pressed", False):
+                                self._raton_right_pressed = False
+                                self._main_cache_dirty = True
+                                is_btn_event = True
+                                btn_clicked = 0
 
                         if (is_tp_event or is_btn_event) and getattr(self, "bt_connected", False):
                             try:
                                 import bluetooth_hid
                                 with bluetooth_hid.USBHID() as hid:
                                     if is_btn_event:
-                                        # Toque de los botones nuevos debajo del trackpad
-                                        hid.send_mouse(btn_clicked, 0, 0)
-                                        # Pequeña pausa para enviar el soltar
-                                        pygame.time.delay(50)
-                                        hid.send_mouse(0, 0, 0)
+                                        if event.type == MOUSEBUTTONDOWN:
+                                            hid.send_mouse(btn_clicked, 0, 0)
+                                        elif event.type == MOUSEBUTTONUP:
+                                            hid.send_mouse(0, 0, 0)
                                     elif event.type == MOUSEBUTTONDOWN:
                                         if getattr(self, "_tp_is_dragging", False):
                                             # Enviar click izquierdo sostenido para iniciar drag & drop / selección
