@@ -1265,12 +1265,19 @@ class ArcadeControlApp:
 
     def pause_game(self):
         """RetroArch: P = pause toggle"""
-        if self._lan_send_retroarch('PAUSE_TOGGLE'): return
-        try:
-            with USBHID(self.config['hid_device']) as hid:
-                hid.send_key(KeyCode.KEY_P)
-        except Exception as e:
-            print(f"Error sending pause: {e}")
+        import threading
+        # Feedback visual instantáneo
+        self.lan_is_game_paused = not getattr(self, "lan_is_game_paused", False)
+        self._main_cache_dirty = True
+        
+        def _send():
+            if self._lan_send_retroarch('PAUSE_TOGGLE'): return
+            try:
+                with USBHID(self.config['hid_device']) as hid:
+                    hid.send_key(KeyCode.KEY_P)
+            except Exception as e:
+                print(f"Error sending pause: {e}")
+        threading.Thread(target=_send, daemon=True).start()
 
     def game_info(self):
         """RetroArch: F1 = menu (no dedicated info key)"""
