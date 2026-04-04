@@ -57,8 +57,7 @@ def handle_vol():
                 elif data['action'] == 'down':
                     new_vol = max(0.0, current - 0.02)
                     vol.SetMasterVolumeLevelScalar(new_vol, None)
-                    if new_vol == 0.0:
-                        vol.SetMute(0, None)
+                    vol.SetMute(0, None)
                 elif data['action'] == 'mute':
                     vol.SetMute(not vol.GetMute(), None)
             else:
