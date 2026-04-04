@@ -977,7 +977,15 @@ class ArcadeControlApp:
 
         RATON_Y = CONT_Y + _s(10)
         RATON_H = h_norm - _s(20)
-        self._raton_rect = pygame.Rect(_s(20), RATON_Y, self.width - _s(40), RATON_H)
+        btn_height = _s(60)
+        # Touchpad height reduced to fit the buttons below with a small margin
+        self._raton_rect = pygame.Rect(_s(20), RATON_Y, self.width - _s(40), RATON_H - btn_height - _s(10))
+        
+        btn_y = self._raton_rect.bottom + _s(10)
+        btn_w = (self.width - _s(50)) // 2
+        
+        self._raton_btn_left_rect = pygame.Rect(_s(20), btn_y, btn_w, btn_height)
+        self._raton_btn_right_rect = pygame.Rect(_s(20) + btn_w + _s(10), btn_y, btn_w, btn_height)
 
         self.tab_scroll_menus = {
             'sistema':  make_scroll(CONT_Y, h_norm, [
@@ -2333,8 +2341,8 @@ class ArcadeControlApp:
 
         if self.current_tab == 'raton':
             # Draw touchpad background and icon
-            pygame.draw.rect(self.screen, (30, 30, 30), self._raton_rect, border_radius=10)
-            pygame.draw.rect(self.screen, (100, 100, 100), self._raton_rect, 2, border_radius=10)
+            pygame.draw.rect(self.screen, (30, 30, 30), self._raton_rect)
+            pygame.draw.rect(self.screen, (100, 100, 100), self._raton_rect, 2)
             
             icon = self.font_icon.render('\ue323', True, (60, 60, 60)) # mouse icon watermark
             icon_rect = icon.get_rect(center=self._raton_rect.center)
@@ -2342,6 +2350,12 @@ class ArcadeControlApp:
             
             text = self.font.render("TOUCHPAD ACTIVO (DESLIZA Y PULSA)", True, (100, 100, 100))
             self.screen.blit(text, text.get_rect(center=(self._raton_rect.centerx, self._raton_rect.centery + 60)))
+            
+            # Draw left and right buttons
+            for btn_rect in [getattr(self, '_raton_btn_left_rect', None), getattr(self, '_raton_btn_right_rect', None)]:
+                if btn_rect:
+                    pygame.draw.rect(self.screen, (30, 30, 30), btn_rect)
+                    pygame.draw.rect(self.screen, (100, 100, 100), btn_rect, 2)
 
         # ── Top status bar (always repainted — clock ticks every second) ────────
         BAR_CY  = _s(44)
@@ -2616,6 +2630,29 @@ class ArcadeControlApp:
     def handle_events(self):
         """Handle pygame events"""
         for event in pygame.event.get():
+            # Track fingers for multi-touch (e.g. 2-finger scroll)
+            if event.type == getattr(pygame, 'FINGERDOWN', -1):
+                fx, fy = int(event.x * self.width), int(event.y * self.height)
+                if hasattr(self, '_raton_rect') and self._raton_rect.collidepoint((fx, fy)):
+                    if not hasattr(self, '_fingers'): self._fingers = {}
+                    self._fingers[event.finger_id] = (fx, fy)
+            elif event.type == getattr(pygame, 'FINGERUP', -1):
+                if hasattr(self, '_fingers') and event.finger_id in self._fingers:
+                    del self._fingers[event.finger_id]
+            elif event.type == getattr(pygame, 'FINGERMOTION', -1):
+                if hasattr(self, '_fingers') and event.finger_id in self._fingers:
+                    self._fingers[event.finger_id] = (int(event.x * self.width), int(event.y * self.height))
+                    # Trigger scroll if 2 fingers
+                    if len(self._fingers) >= 2 and getattr(self, "bt_connected", False) and self.current_tab == 'raton':
+                        # dy is relative, use it to send wheel
+                        wheel_val = int(-event.dy * 150)  # scale dy
+                        if wheel_val != 0:
+                            import bluetooth_hid
+                            try:
+                                with bluetooth_hid.USBHID() as hid:
+                                    hid.send_mouse(0, 0, 0, wheel_val)
+                            except: pass
+            
             if event.type == QUIT:
                 self.running = False
             elif event.type == KEYDOWN:
@@ -2686,42 +2723,80 @@ class ArcadeControlApp:
                     # Raton/Touchpad handling
                     if self.current_tab == 'raton' and hasattr(self, '_raton_rect'):
                         is_tp_event = False
-                        if event.type == MOUSEBUTTONDOWN and self._raton_rect.collidepoint(event.pos):
-                            self._tp_active = True
-                            self._tp_down = pygame.time.get_ticks()
-                            is_tp_event = True
+                        is_btn_event = False
+                        btn_clicked = 0
+                        now = pygame.time.get_ticks()
+                        if event.type == MOUSEBUTTONDOWN:
+                            if self._raton_rect.collidepoint(event.pos):
+                                self._tp_active = True
+                                self._tp_down_time = now
+                                self._tp_moved = False
+                                
+                                # Comprobar doble tap: menos de 400ms desde el último click
+                                last_tap = getattr(self, "_tp_last_tap_time", 0)
+                                if now - last_tap < 400:
+                                    self._tp_is_dragging = True
+                                else:
+                                    self._tp_is_dragging = False
+                                    
+                                is_tp_event = True
+                            elif hasattr(self, "_raton_btn_left_rect") and self._raton_btn_left_rect.collidepoint(event.pos):
+                                is_btn_event = True
+                                btn_clicked = 1 # Left click
+                            elif hasattr(self, "_raton_btn_right_rect") and self._raton_btn_right_rect.collidepoint(event.pos):
+                                is_btn_event = True
+                                btn_clicked = 2 # Right click
+                                
                         elif getattr(self, "_tp_active", False):
                             is_tp_event = True
                             if event.type == MOUSEBUTTONUP:
                                 self._tp_active = False
 
-                        if is_tp_event and getattr(self, "bt_connected", False):
+                        if (is_tp_event or is_btn_event) and getattr(self, "bt_connected", False):
                             try:
                                 import bluetooth_hid
                                 with bluetooth_hid.USBHID() as hid:
-                                    if event.type == MOUSEBUTTONUP:
-                                        down_ticks = getattr(self, "_tp_down", 0)
-                                        if down_ticks and pygame.time.get_ticks() - down_ticks < 300:
-                                            # Short tap -> Click 
+                                    if is_btn_event:
+                                        # Toque de los botones nuevos debajo del trackpad
+                                        hid.send_mouse(btn_clicked, 0, 0)
+                                        # Pequeña pausa para enviar el soltar
+                                        pygame.time.delay(50)
+                                        hid.send_mouse(0, 0, 0)
+                                    elif event.type == MOUSEBUTTONDOWN:
+                                        if getattr(self, "_tp_is_dragging", False):
+                                            # Enviar click izquierdo sostenido para iniciar drag & drop / selección
                                             hid.send_mouse(1, 0, 0)
+                                    elif event.type == MOUSEBUTTONUP:
+                                        if getattr(self, "_tp_is_dragging", False):
+                                            # Soltar el click sostenido
                                             hid.send_mouse(0, 0, 0)
+                                            self._tp_is_dragging = False
+                                            self._tp_last_tap_time = 0
                                         else:
-                                            # Release explicitly in case it was a long drag
-                                            hid.send_mouse(0, 0, 0)
-                                        self._tp_down = 0
+                                            # No estábamos arrastrando. ¿Fue un toque rápido sin moverse apenas?
+                                            if not getattr(self, "_tp_moved", False) and (now - getattr(self, "_tp_down_time", 0) < 300):
+                                                # Click rápido
+                                                hid.send_mouse(1, 0, 0)
+                                                hid.send_mouse(0, 0, 0)
+                                                self._tp_last_tap_time = now
+                                            else:
+                                                hid.send_mouse(0, 0, 0)
                                     elif event.type == MOUSEMOTION:
-                                        rx, ry = event.rel if not self._scale_to_display else (
-                                            event.rel[0] * self.width // self._phys_w,
-                                            event.rel[1] * self.height // self._phys_h
-                                        )
-                                        # Allow small jitter without canceling the tap
-                                        if abs(rx) > 2 or abs(ry) > 2:
-                                            self._tp_down = 0
-                                        
-                                        if abs(rx) > 0 or abs(ry) > 0:
-                                            # Ignoramos el estado capacitivo de la pantalla en arrastre,
-                                            # un simple dedo es solo desplazamiento de puntero
-                                            hid.send_mouse(0, int(rx*1.5), int(ry*1.5))
+                                        if hasattr(self, '_fingers') and len(self._fingers) >= 2:
+                                            pass # Skip pointer move if multi-touch scroll
+                                        else:
+                                            rx, ry = event.rel if not self._scale_to_display else (
+                                                event.rel[0] * self.width // self._phys_w,
+                                                event.rel[1] * self.height // self._phys_h
+                                            )
+                                            # Tolerar un poco de "jitter" estático del dedo
+                                            if abs(rx) > 2 or abs(ry) > 2:
+                                                self._tp_moved = True
+                                            
+                                            if abs(rx) > 0 or abs(ry) > 0:
+                                                # Cuando deslizamos, si es un arrastre de doble toque mandamos btn1 = 1, si no = 0
+                                                btn = 1 if getattr(self, "_tp_is_dragging", False) else 0
+                                                hid.send_mouse(btn, int(rx*1.5), int(ry*1.5))
                             except Exception:
                                 pass
 

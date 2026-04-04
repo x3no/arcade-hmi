@@ -145,8 +145,8 @@ _HID_DESC = bytes([
     0x29, 0x03, 0x15, 0x00, 0x25, 0x01, 0x95, 0x03, 
     0x75, 0x01, 0x81, 0x02, 0x95, 0x01, 0x75, 0x05, 
     0x81, 0x03, 0x05, 0x01, 0x09, 0x30, 0x09, 0x31, 
-    0x15, 0x81, 0x25, 0x7f, 0x75, 0x08, 0x95, 0x02, 
-    0x81, 0x06, 0xc0, 0xc0
+    0x09, 0x38, 0x15, 0x81, 0x25, 0x7F, 0x75, 0x08, 
+    0x95, 0x03, 0x81, 0x06, 0xc0, 0xc0
 ])
 
 # HID report ID assignments
@@ -157,7 +157,7 @@ REPORT_ID_MOUSE     = 0x03
 # Release reports (one per report ID)
 RELEASE_KEYBOARD = bytes([HID_INPUT, REPORT_ID_KEYBOARD, 0, 0, 0, 0, 0, 0, 0, 0])
 RELEASE_CONSUMER = bytes([HID_INPUT, REPORT_ID_CONSUMER, 0x00, 0x00])
-RELEASE_MOUSE    = bytes([HID_INPUT, REPORT_ID_MOUSE, 0x00, 0x00, 0x00])
+RELEASE_MOUSE    = bytes([HID_INPUT, REPORT_ID_MOUSE, 0x00, 0x00, 0x00, 0x00])
 
 # SDP record XML published via BlueZ D-Bus so Windows recognises a keyboard
 _SDP_RECORD = f"""<?xml version="1.0" encoding="UTF-8"?>
@@ -761,7 +761,7 @@ class BTKeyboardServer:
                 self._ctrl = None
                 return False
 
-    def send_mouse(self, buttons: int, dx: int, dy: int) -> bool:
+    def send_mouse(self, buttons: int, dx: int, dy: int, wheel: int = 0) -> bool:
         with self._lock:
             intr = self._intr
             if intr is None:
@@ -796,12 +796,13 @@ class BTKeyboardServer:
                     # Legacy Keyboard
                     ok = self.send_key(data[0], data[1])
                     conn.send(b'\x01' if ok else b'\x00')
-                elif len(data) == 4 and data[0] == 0x03:
+                elif (len(data) == 4 or len(data) == 5) and data[0] == 0x03:
                     # Mouse Report: [0x03, buttons, dx, dy] (dx, dy as signed byte sent as uint8)
                     buttons = data[1]
                     dx = data[2] if data[2] < 128 else data[2] - 256
                     dy = data[3] if data[3] < 128 else data[3] - 256
-                    ok = self.send_mouse(buttons, dx, dy)
+                    wheel = (data[4] if data[4] < 128 else data[4] - 256) if len(data) == 5 else 0
+                    ok = self.send_mouse(buttons, dx, dy, wheel)
                     conn.send(b'\x01' if ok else b'\x00')
         except Exception:
             pass
