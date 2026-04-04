@@ -214,8 +214,11 @@ class ScrollMenu:
         self.btn_gap = btn_gap
 
         # 4 or fewer buttons: expand to fill full width (scroll disabled)
-        if len(buttons) <= 4:
+        if 0 < len(buttons) <= 4:
             btn_w = (self.rect.width - btn_gap * (len(buttons) + 1)) // len(buttons)
+        elif len(buttons) == 0:
+            btn_w = 0
+            
         self.btn_w   = btn_w
 
         btn_h = min(_s(400), self.rect.height - _s(15) - _s(20))  # 15px top + 20px bottom padding
@@ -387,6 +390,127 @@ class ScrollMenu:
                 surface.blit(text_surf, text_surf.get_rect(center=sr.center))
         surface.set_clip(clip)
 
+
+class MediaController:
+    """Spotify media controller widget."""
+    def __init__(self, rect, app):
+        self.rect = pygame.Rect(rect)
+        self._app = app
+        cx = self.rect.centerx
+        by = self.rect.bottom - _s(35)
+        # Prev, Play/Pause, Next rects
+        bw = _s(50)
+        self.btn_prev  = pygame.Rect(cx - bw - _s(20), by - bw//2, bw, bw)
+        self.btn_play  = pygame.Rect(cx - bw//2,       by - bw//2, bw, bw)
+        self.btn_next  = pygame.Rect(cx + bw//2 + _s(20), by - bw//2, bw, bw)
+        
+        self.bar_y = self.rect.y + _s(40)
+        self.bar_rect = pygame.Rect(self.rect.x + _s(60), self.bar_y, self.rect.width - _s(120), _s(12))
+        self.dragging = False
+
+    def handle_event(self, event):
+        info = self._app.spotify_info
+        if not info or not info.get('duration'):
+            return False
+
+        if event.type == MOUSEBUTTONDOWN:
+            if self.bar_rect.collidepoint(event.pos) or (
+                self.rect.left < event.pos[0] < self.rect.right and 
+                self.bar_y - _s(20) < event.pos[1] < self.bar_y + _s(20)
+            ):
+                self.dragging = True
+                self._update_pos(event.pos[0])
+                return True
+            elif self.btn_prev.collidepoint(event.pos):
+                self._send_action("prev")
+                return True
+            elif self.btn_play.collidepoint(event.pos):
+                self._send_action("toggle")
+                return True
+            elif self.btn_next.collidepoint(event.pos):
+                self._send_action("next")
+                return True
+        elif event.type == MOUSEMOTION and self.dragging:
+            self._update_pos(event.pos[0])
+            return True
+        elif event.type == MOUSEBUTTONUP and self.dragging:
+            self.dragging = False
+            return True
+        return False
+
+    def _update_pos(self, mx):
+        info = self._app.spotify_info
+        w = max(1, self.bar_rect.width)
+        rel_x = max(0, min(w, mx - self.bar_rect.x))
+        new_pos = int((rel_x / w) * info.get('duration', 0))
+        # Optimistic update locally
+        info['position'] = new_pos
+        import time
+        self._app.spotify_last_update = time.time()
+        self._send_action("seek", new_pos)
+        self._app._main_cache_dirty = True
+
+    def _send_action(self, action, value=None):
+        if not self._app.lan_pc_ip: return
+        import threading, json, urllib.request
+        def _req():
+            try:
+                data = json.dumps({'action': action, 'value': value}).encode('utf-8')
+                req = urllib.request.Request(f"http://{self._app.lan_pc_ip}:5000/spotify", data=data, headers={'Content-Type': 'application/json'}, method='POST')
+                with urllib.request.urlopen(req, timeout=1.0) as resp:
+                    pass
+            except Exception: pass
+        threading.Thread(target=_req, daemon=True).start()
+        
+    def draw(self, surface, font, font_icon):
+        pygame.draw.rect(surface, (40, 40, 40), self.rect, border_radius=_s(8))
+        pygame.draw.rect(surface, C_GRAY, self.rect, _s(2), border_radius=_s(8))
+        
+        info = self._app.spotify_info
+        if not info.get('duration'):
+            txt = _rt(font, "Spotify no activo", C_GRAY)
+            surface.blit(txt, txt.get_rect(center=self.rect.center))
+            return
+            
+        import time
+        dur = info.get('duration', 0)
+        # extrapolate position since last poll
+        pos = info.get('position', 0)
+        if info.get('playing') and not info.get('paused'):
+            pos += int(time.time() - self._app.spotify_last_update)
+            pos = min(dur, pos)
+
+        # Title
+        song = info.get('song') or "Unknown"
+        art  = info.get('artist') or ""
+        text = f"{art} - {song}" if art else song
+        if len(text) > 40: text = text[:37] + "..."
+        txt = _rt(font, text, C_WHITE)
+        surface.blit(txt, txt.get_rect(centerx=self.rect.centerx, bottom=self.bar_y - _s(12)))
+        
+        # Track Bar
+        pygame.draw.rect(surface, (70, 70, 70), self.bar_rect, border_radius=_s(4))
+        w = max(0, int((pos / max(1, dur)) * self.bar_rect.width))
+        fill_r = pygame.Rect(self.bar_rect.x, self.bar_rect.y, w, self.bar_rect.height)
+        pygame.draw.rect(surface, (0, 210, 100), fill_r, border_radius=_s(4))
+        pygame.draw.circle(surface, (255, 255, 255), (fill_r.right, fill_r.centery), _s(8))
+        
+        # Times
+        s_m, s_s = divmod(pos, 60)
+        d_m, d_s = divmod(dur, 60)
+        t_pos = _rt(font, f"{s_m}:{s_s:02d}", C_GRAY)
+        t_dur = _rt(font, f"{d_m}:{d_s:02d}", C_GRAY)
+        surface.blit(t_pos, t_pos.get_rect(midright=(self.bar_rect.left - _s(8), self.bar_rect.centery)))
+        surface.blit(t_dur, t_dur.get_rect(midleft=(self.bar_rect.right + _s(8), self.bar_rect.centery)))
+
+        # Buttons
+        icon_prev = font_icon.render('\ue045', True, C_WHITE) # skip_previous
+        icon_play = font_icon.render('\ue034' if not info.get('paused') else '\ue037', True, C_WHITE)
+        icon_next = font_icon.render('\ue044', True, C_WHITE) # skip_next
+        
+        surface.blit(icon_prev, icon_prev.get_rect(center=self.btn_prev.center))
+        surface.blit(icon_play, icon_play.get_rect(center=self.btn_play.center))
+        surface.blit(icon_next, icon_next.get_rect(center=self.btn_next.center))
 
 class VolumeSlider:
     """Touch-friendly horizontal volume slider that sends to LAN API.
@@ -694,8 +818,13 @@ class ArcadeControlApp:
         self.lan_is_menu_running = False
         self.lan_game_title = None
         self.lan_game_system = None
+        self.lan_is_game_paused = False
         self.lan_game_image_bytes = None  # Buffer crudo para convertir en thread principal
         self.lan_game_image_surf = None   # Pygame surface de la captura en vivo
+
+        # Spotify status
+        self.spotify_info = {'playing': False, 'paused': False, 'artist': None, 'song': None, 'position': 0, 'duration': 0}
+        self.spotify_last_update = 0
         
         self._start_bt_status_poller()
         self._start_wifi_poller()
@@ -755,19 +884,20 @@ class ArcadeControlApp:
         GAP      = _s(4)
         TAB_Y    = _s(90)
         TAB_H    = _s(160)
-        TAB_W    = (self.width - GAP * 3) // 4   # 4 tabs with 3 gaps between
+        TAB_W    = (self.width - GAP * 4) // 5   # 5 tabs with 4 gaps between
         SLOT_Y   = TAB_Y + TAB_H + _s(10)
         SLOT_H   = _s(180)
         SLOT_W   = (self.width - GAP * 9) // 10  # 10 items (GENERAL + 1-9) with 9 gaps
         CONT_Y   = TAB_Y + TAB_H        # non-Partida content starts here
         CONT_Y_P = SLOT_Y + SLOT_H      # Partida content starts here
 
-        # Main tab bar (4 tabs)
+        # Main tab bar (5 tabs)
         # Material Icons codepoints (static font, U+E000 range)
         tab_defs = [
             ('sistema',  'SISTEMA',  '\ue30a'),  # computer
             ('sonido',   'SONIDO',   '\ue050'),  # volume_up
             ('partida',  'PARTIDA',  '\ue30f'),  # gamepad
+            ('raton',    'RATÓN',    '\ue323'),  # mouse
             ('monedero', 'MONEDERO', '\ue850'),  # account_balance_wallet
         ]
         self.tab_buttons = [
@@ -804,11 +934,17 @@ class ArcadeControlApp:
         h_norm = self.height - CONT_Y - CLOCK_H
         h_part = self.height - CONT_Y_P - CLOCK_H
 
-        # ── Volume slider geometry (sonido tab only) ─────────────────────────
-        # h_sonido leaves room below buttons for the slider within the content area.
-        SLIDER_H = _s(150)
-        h_sonido = h_norm - SLIDER_H - _s(10)
-        SLIDER_Y = CONT_Y + h_sonido + _s(8)
+        # ── Media Controller y Volume slider (sonido tab only) ─────────────────
+        MEDIA_H = _s(110)
+        SLIDER_H = _s(120)  # slightly reduced to fit media
+        h_sonido  = h_norm - SLIDER_H - MEDIA_H - _s(20)
+        
+        MEDIA_Y   = CONT_Y + h_sonido + _s(5)
+        SLIDER_Y  = MEDIA_Y + MEDIA_H + _s(10)
+        
+        self.media_controller = MediaController(
+            (_s(16), MEDIA_Y, self.width - _s(32), MEDIA_H), self
+        )
         self.volume_slider = VolumeSlider(
             (_s(16), SLIDER_Y, self.width - _s(32), SLIDER_H), self
         )
@@ -835,6 +971,11 @@ class ArcadeControlApp:
         self.reset_btn = SimpleButton(
             (0,0,0,0), 'REINICIAR PC', action=self.reset_pc_confirm, icon='\ue5d5', disabled=True
         )
+
+        RATON_Y = CONT_Y + _s(10)
+        RATON_H = h_norm - _s(20)
+        self._raton_rect = pygame.Rect(_s(20), RATON_Y, self.width - _s(40), RATON_H)
+
         self.tab_scroll_menus = {
             'sistema':  make_scroll(CONT_Y, h_norm, [
                 self.power_btn,
@@ -854,6 +995,7 @@ class ArcadeControlApp:
                 SimpleButton((0,0,0,0), "COIN P1", action=self.coin_p1, icon='\ue227', disabled=True),
                 SimpleButton((0,0,0,0), "COIN P2", action=self.coin_p2, icon='\ue227', disabled=True),
             ]),
+            'raton': make_scroll(CONT_Y, h_norm, []),
         }
 
         # Keep explicit references for sonido buttons so we can update them
@@ -1475,6 +1617,7 @@ class ArcadeControlApp:
                         with urllib.request.urlopen(req_game, timeout=2.0) as resp:
                             data = json.loads(resp.read().decode())
                             new_running = data.get('is_game_running', False)
+                            new_paused = data.get('is_game_paused', False)
                             new_menu = data.get('is_menu_running', False)
                             new_title = data.get('game')
                             new_system = data.get('system')
@@ -1483,10 +1626,12 @@ class ArcadeControlApp:
                                 new_title = new_title[:27] + "..."
                                 
                             if (self.lan_is_game_running != new_running or 
+                                getattr(self, "lan_is_game_paused", False) != new_paused or
                                 self.lan_is_menu_running != new_menu or 
                                 self.lan_game_title != new_title or
                                 getattr(self, "lan_game_system", None) != new_system):
                                 self.lan_is_game_running = new_running
+                                self.lan_is_game_paused = new_paused
                                 self.lan_is_menu_running = new_menu
                                 self.lan_game_title = new_title
                                 self.lan_game_system = new_system
@@ -1504,6 +1649,23 @@ class ArcadeControlApp:
                             except Exception:
                                 pass
 
+                        # Spotify
+                        if self.current_tab == 'sonido':
+                            try:
+                                req_spot = urllib.request.Request(f"http://{self.lan_pc_ip}:5000/spotify", method="GET")
+                                with urllib.request.urlopen(req_spot, timeout=1.0) as resp:
+                                    sdata = json.loads(resp.read().decode())
+                                    if not sdata.get('error'):
+                                        # Only dirty cache if playstate or song changes
+                                        if (self.spotify_info.get('playing') != sdata.get('playing') or 
+                                            self.spotify_info.get('song') != sdata.get('song')):
+                                            self._main_cache_dirty = True
+                                        self.spotify_info = sdata
+                                        import time
+                                        self.spotify_last_update = time.time()
+                            except Exception:
+                                pass
+
                         _consecutive_fails = 0  # petición exitosa
                         _t.sleep(2)
                     except Exception as _e:
@@ -1516,6 +1678,7 @@ class ArcadeControlApp:
                             self.lan_is_menu_running = False
                             self.lan_game_title = None
                             self.lan_game_system = None
+                            self.lan_is_game_paused = False
                             self._main_cache_dirty = True
                             _consecutive_fails = 0
                         _t.sleep(2)
@@ -2110,6 +2273,21 @@ class ArcadeControlApp:
             self.mute_btn.text = "SILENCIAR"
             self.mute_btn.icon = '\ue04f'   # volume_off
 
+        # Control de botones de Partida: solo activos si hay juego corriendo
+        is_playing = self.lan_is_game_running
+        for btn in self.partida_general_btns:
+            btn.disabled = not is_playing
+        for btn in self.partida_slot_btns:
+            btn.disabled = not is_playing
+
+        # Botón de Pausar / Reanudar
+        if getattr(self, "lan_is_game_paused", False):
+            self.partida_general_btns[0].text = "REANUDAR"
+            self.partida_general_btns[0].icon = '\ue037' # play_arrow
+        else:
+            self.partida_general_btns[0].text = "PAUSAR"
+            self.partida_general_btns[0].icon = '\ue034' # pause
+
         for btn in self.tab_buttons:
             btn.draw(s, self.font_tab, self.font_icon)
 
@@ -2144,8 +2322,23 @@ class ArcadeControlApp:
 
         # Volume slider — drawn live below the sonido scroll menu
         if self.current_tab == 'sonido':
+            # Draw Media Controller
+            self.media_controller.draw(self.screen, self.font_mono, self.font_icon)
+            
             pygame.draw.rect(self.screen, C_BG, self.volume_slider.rect)
             self.volume_slider.draw(self.screen, self.font_mono)
+
+        if self.current_tab == 'raton':
+            # Draw touchpad background and icon
+            pygame.draw.rect(self.screen, (30, 30, 30), self._raton_rect, border_radius=10)
+            pygame.draw.rect(self.screen, (100, 100, 100), self._raton_rect, 2, border_radius=10)
+            
+            icon = self.font_icon.render('\ue323', True, (60, 60, 60)) # mouse icon watermark
+            icon_rect = icon.get_rect(center=self._raton_rect.center)
+            self.screen.blit(icon, icon_rect)
+            
+            text = self.font.render("TOUCHPAD ACTIVO (DESLIZA Y PULSA)", True, (100, 100, 100))
+            self.screen.blit(text, text.get_rect(center=(self._raton_rect.centerx, self._raton_rect.centery + 60)))
 
         # ── Top status bar (always repainted — clock ticks every second) ────────
         BAR_CY  = _s(44)
@@ -2193,10 +2386,21 @@ class ArcadeControlApp:
         # Current Game - center (only if known via LAN)
         if self.lan_is_game_running and self.lan_game_title:
             if getattr(self, "lan_game_system", None):
-                game_text = f"JUGANDO: [{self.lan_game_system.upper()}] {self.lan_game_title}"
+                game_text = f"[{self.lan_game_system.upper()}] {self.lan_game_title}"
             else:
-                game_text = f"JUGANDO: {self.lan_game_title}"
-            game_surf = _rt(self.font_mono, game_text, (255, 165, 0))
+                game_text = f"{self.lan_game_title}"
+                
+            if getattr(self, "lan_is_game_paused", False):
+                # Intermitente en amarillo o amarillo oscuro transparente (segundo a segundo)
+                if int(time.time()) % 2 == 0:
+                    game_surf = _rt(self.font_mono, f"PAUSADO: {game_text}", (255, 255, 0))
+                else:
+                    game_surf = _rt(self.font_mono, f"PAUSADO: {game_text}", (120, 120, 0))
+                # Forzar refresco el próximo fotograma si está en pausa para asegurar el parpadeo
+                self._main_cache_dirty = True
+            else:
+                game_surf = _rt(self.font_mono, f"JUGANDO: {game_text}", (255, 165, 0))
+                
             self.screen.blit(game_surf, game_surf.get_rect(center=(self.width // 2, BAR_BOT_CY)))
         elif self.lan_is_menu_running:
             game_surf = _rt(self.font_mono, "NAVEGANDO EN MENÚ", (0, 210, 100))
@@ -2475,11 +2679,48 @@ class ArcadeControlApp:
                             for btn in self.slot_buttons:
                                 if btn.handle_event(event):
                                     break
+                                    
+                    # Raton/Touchpad handling
+                    if self.current_tab == 'raton' and hasattr(self, '_raton_rect'):
+                        if self._raton_rect.collidepoint(event.pos):
+                            if getattr(self, "bt_connected", False):
+                                try:
+                                    import bluetooth_hid
+                                    with bluetooth_hid.USBHID() as hid:
+                                        if event.type == MOUSEBUTTONDOWN:
+                                            self._tp_down = pygame.time.get_ticks()
+                                        elif event.type == MOUSEBUTTONUP:
+                                            down_ticks = getattr(self, "_tp_down", 0)
+                                            if down_ticks and pygame.time.get_ticks() - down_ticks < 300:
+                                                # Short tap -> Click 
+                                                hid.send_mouse(1, 0, 0)
+                                                hid.send_mouse(0, 0, 0)
+                                                self._tp_down = 0
+                                        elif event.type == MOUSEMOTION:
+                                            rx, ry = event.rel if not self._scale_to_display else (
+                                                event.rel[0] * self.width // self._phys_w,
+                                                event.rel[1] * self.height // self._phys_h
+                                            )
+                                            # Allow small jitter without canceling the tap
+                                            if abs(rx) > 2 or abs(ry) > 2:
+                                                self._tp_down = 0
+                                            
+                                            if abs(rx) > 0 or abs(ry) > 0:
+                                                btn1 = 1 if getattr(event, 'buttons', [0])[0] else 0
+                                                hid.send_mouse(btn1, int(rx*1.5), int(ry*1.5))
+                                except Exception:
+                                    pass
+
                     # Scrollable content (handles all mouse events incl. motion)
                     # On sonido tab, let the volume slider grab touch inside its rect first
-                    if self.current_tab == 'sonido' and self.volume_slider.handle_event(event):
-                        pass  # slider consumed the event
-                    else:
+                    if self.current_tab == 'sonido':
+                        if self.volume_slider.handle_event(event):
+                            pass
+                        elif self.media_controller.handle_event(event):
+                            pass
+                        else:
+                            self._active_scroll_menu().handle_event(event)
+                    elif self.current_tab != 'raton':
                         self._active_scroll_menu().handle_event(event)
 
                         

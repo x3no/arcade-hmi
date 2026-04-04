@@ -138,11 +138,26 @@ _HID_DESC = bytes([
     0x95, 0x01,        #   Report Count (1)
     0x81, 0x00,        #   Input (Consumer key)
     0xc0,              # End Collection
+
+    # --- Report ID 3: Mouse ---
+    0x05, 0x01, 0x09, 0x02, 0xa1, 0x01, 0x85, 0x03, 
+    0x09, 0x01, 0xa1, 0x00, 0x05, 0x09, 0x19, 0x01, 
+    0x29, 0x03, 0x15, 0x00, 0x25, 0x01, 0x95, 0x03, 
+    0x75, 0x01, 0x81, 0x02, 0x95, 0x01, 0x75, 0x05, 
+    0x81, 0x03, 0x05, 0x01, 0x09, 0x30, 0x09, 0x31, 
+    0x15, 0x81, 0x25, 0x7f, 0x75, 0x08, 0x95, 0x02, 
+    0x81, 0x06, 0xc0, 0xc0
 ])
+
+# HID report ID assignments
+REPORT_ID_KEYBOARD  = 0x01
+REPORT_ID_CONSUMER  = 0x02
+REPORT_ID_MOUSE     = 0x03
 
 # Release reports (one per report ID)
 RELEASE_KEYBOARD = bytes([HID_INPUT, REPORT_ID_KEYBOARD, 0, 0, 0, 0, 0, 0, 0, 0])
 RELEASE_CONSUMER = bytes([HID_INPUT, REPORT_ID_CONSUMER, 0x00, 0x00])
+RELEASE_MOUSE    = bytes([HID_INPUT, REPORT_ID_MOUSE, 0x00, 0x00, 0x00])
 
 # SDP record XML published via BlueZ D-Bus so Windows recognises a keyboard
 _SDP_RECORD = f"""<?xml version="1.0" encoding="UTF-8"?>
@@ -746,14 +761,47 @@ class BTKeyboardServer:
                 self._ctrl = None
                 return False
 
+    def send_mouse(self, buttons: int, dx: int, dy: int) -> bool:
+        with self._lock:
+            intr = self._intr
+            if intr is None:
+                return False
+            try:
+                # clamp dx, dy to signed 8-bit
+                dx = max(-127, min(127, dx))
+                dy = max(-127, min(127, dy))
+                # python negative to uint8 conversion
+                udx = dx & 0xFF
+                udy = dy & 0xFF
+                
+                press = bytes([HID_INPUT, REPORT_ID_MOUSE, buttons & 0x07, udx, udy])
+                intr.send(press)
+                
+                # If buttons let go, immediately send releasing of buttons? Wait, a mouse movement could just be dx/dy, without clearing buttons!
+                # We won't automatically release mouse buttons, but if it's a click, the client will send buttons=0 next!
+                return True
+            except OSError as e:
+                log.warning(f'send_mouse failed: {e}')
+                self._intr = None
+                self._ctrl = None
+                return False
+
     # ── Unix socket command server ────────────────────────────────────────────
 
     def _handle_unix_client(self, conn):
         try:
             with conn:
-                data = conn.recv(2)
+                data = conn.recv(6)
                 if len(data) == 2:
+                    # Legacy Keyboard
                     ok = self.send_key(data[0], data[1])
+                    conn.send(b'\x01' if ok else b'\x00')
+                elif len(data) == 4 and data[0] == 0x03:
+                    # Mouse Report: [0x03, buttons, dx, dy] (dx, dy as signed byte sent as uint8)
+                    buttons = data[1]
+                    dx = data[2] if data[2] < 128 else data[2] - 256
+                    dy = data[3] if data[3] < 128 else data[3] - 256
+                    ok = self.send_mouse(buttons, dx, dy)
                     conn.send(b'\x01' if ok else b'\x00')
         except Exception:
             pass

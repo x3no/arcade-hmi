@@ -79,7 +79,8 @@ def get_current_arcade_game():
     if status:
         clean_status = status.replace("GET_STATUS ", "").strip()
         status_parts = clean_status.split(" ", 1)
-        if len(status_parts) > 0 and status_parts[0].lower() == "playing":
+        st_cmd = status_parts[0].lower() if len(status_parts) > 0 else ""
+        if st_cmd in ["playing", "paused"]:
             game_name = "Unknown"
             system_name = "Unknown"
             if len(status_parts) > 1:
@@ -88,7 +89,8 @@ def get_current_arcade_game():
                     system_name = game_info[0].strip()
                 if len(game_info) >= 2:
                     game_name = game_info[1].strip()
-            return {"is_game_running": True, "is_menu_running": False, "game": game_name, "system": system_name}
+            is_paused = (st_cmd == "paused")
+            return {"is_game_running": True, "is_game_paused": is_paused, "is_menu_running": False, "game": game_name, "system": system_name}
 
     EnumWindows = ctypes.windll.user32.EnumWindows
     GetWindowText = ctypes.windll.user32.GetWindowTextW
@@ -270,6 +272,125 @@ def get_game_preview():
         return send_file(buf, mimetype='image/jpeg')
     except Exception as e:
         return jsonify({"error": f"Fallo al capturar: {e}"}), 500
+
+# --- 4. SPOTIFY INFO ---
+try:
+    import asyncio
+    from winsdk.windows.media.control import GlobalSystemMediaTransportControlsSessionManager, GlobalSystemMediaTransportControlsSessionPlaybackStatus
+    WINSDK_AVAILABLE = True
+except ImportError:
+    WINSDK_AVAILABLE = False
+
+def get_spotify_status():
+    """Usa la API nativa de Windows 10/11 de controles multimedia para obtener estado, duración y posición"""
+    if not WINSDK_AVAILABLE:
+        return {"error": "winsdk no está instalado. Ejecuta: pip install winsdk"}
+
+    async def _get_info():
+        try:
+            # Obtener el gestor de sesiones multimedia de Windows (el que sale al subir/bajar volumen)
+            manager = await GlobalSystemMediaTransportControlsSessionManager.request_async()
+            session = manager.get_current_session()
+            
+            if not session:
+                return {"playing": False, "artist": None, "song": None, "position": 0, "duration": 0}
+            
+            app_id = session.source_app_user_model_id
+            # Filtrar si quieres que solo responda a Spotify (comentar si quieres que sirva para YouTube/Chrome/MediaPlayer)
+            if app_id and "Spotify" not in app_id:
+                 return {"playing": False, "artist": None, "song": None, "position": 0, "duration": 0}
+            
+            # Extraer todas las propiedades asincrónicas y sincronizadas de la sesión
+            props = await session.try_get_media_properties_async()
+            timeline = session.get_timeline_properties()
+            playback = session.get_playback_info()
+            
+            # winsdk mapea los valores a enumeradores. Status 4 = Playing, Status 5 = Paused
+            is_playing = (playback.playback_status == GlobalSystemMediaTransportControlsSessionPlaybackStatus.PLAYING)
+            is_paused = (playback.playback_status == GlobalSystemMediaTransportControlsSessionPlaybackStatus.PAUSED)
+            
+            # timeline devuelve objetos timedelta estándar de Python
+            pos_sec = timeline.position.total_seconds() if timeline else 0
+            dur_sec = timeline.end_time.total_seconds() if timeline else 0
+            
+            return {
+                "playing": is_playing or is_paused,
+                "paused": is_paused,
+                "artist": props.artist,
+                "song": props.title,
+                "position": int(pos_sec),
+                "duration": int(dur_sec)
+            }
+        except Exception as e:
+            return {"error": str(e)}
+
+    # Ejecutamos la función asíncrona dentro del hilo síncrono del servidor Flask
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    return loop.run_until_complete(_get_info())
+
+@app.route('/spotify', methods=['GET', 'POST'])
+def handle_spotify_endpoint():
+    if request.method == 'POST':
+        if not WINSDK_AVAILABLE:
+            return jsonify({"error": "winsdk no está instalado"}), 501
+            
+        data = request.json or {}
+        action = data.get('action')
+        value = data.get('value', 10) # 10 segundos por defecto para forward/rewind
+        
+        async def _control(act, val):
+            try:
+                manager = await GlobalSystemMediaTransportControlsSessionManager.request_async()
+                session = manager.get_current_session()
+                if not session:
+                    return {"error": "No media session found"}
+                    
+                res = False
+                if act == 'play':
+                    res = await session.try_play_async()
+                elif act == 'pause':
+                    res = await session.try_pause_async()
+                elif act == 'toggle':
+                    res = await session.try_toggle_play_pause_async()
+                elif act == 'next':
+                    res = await session.try_skip_next_async()
+                elif act == 'prev':
+                    res = await session.try_skip_previous_async()
+                elif act in ['forward', 'rewind', 'seek']:
+                    timeline = session.get_timeline_properties()
+                    if timeline:
+                        current_pos = timeline.position.total_seconds()
+                        new_pos = current_pos
+                        if act == 'forward':
+                            new_pos += val
+                        elif act == 'rewind':
+                            new_pos -= val
+                        elif act == 'seek':
+                            new_pos = val
+                            
+                        # Limitar nueva posición entre 0 y el total de la pista
+                        new_pos = max(0, min(new_pos, timeline.end_time.total_seconds()))
+                        
+                        try:
+                            # 100ns ticks format for older bindings
+                            res = await session.try_change_playback_position_async(int(new_pos * 10000000))
+                        except TypeError:
+                            # fallback: si exige tipo datetime.timedelta en winsdk
+                            import datetime
+                            res = await session.try_change_playback_position_async(datetime.timedelta(seconds=new_pos))
+                
+                # La API nativa a veces tarda unos ms en refrescar, por lo que devolvemos status final como confirmación
+                return {"status": "ok", "action": act, "success": res}
+            except Exception as e:
+                return {"error": str(e)}
+
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        return jsonify(loop.run_until_complete(_control(action, value)))
+
+    # GET request by default
+    return jsonify(get_spotify_status())
 
 @app.route('/retroarch', methods=['POST'])
 def send_retroarch_cmd():

@@ -47,6 +47,21 @@ class BluetoothHID:
         finally:
             sock.close()
 
+    def send_mouse(self, buttons: int, dx: int, dy: int):
+        sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        sock.settimeout(1.0)
+        try:
+            sock.connect(UNIX_SOCK_PATH)
+            # 0x03 is Report ID for Mouse
+            dx = max(-127, min(127, dx))
+            dy = max(-127, min(127, dy))
+            sock.send(bytes([0x03, buttons & 0x07, dx & 0xFF, dy & 0xFF]))
+            resp = sock.recv(1)
+        except Exception:
+            pass # ignore errors on mouse drag to not spam logs
+        finally:
+            sock.close()
+
     def send_key(self, key_code, modifiers=0):
         self._send(modifiers, key_code)
 
