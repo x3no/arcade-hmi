@@ -2778,6 +2778,9 @@ class ArcadeControlApp:
                                 is_btn_event = True
                                 btn_clicked = 2 # Right click
                                 
+                        elif event.type == MOUSEMOTION:
+                            if getattr(self, "_tp_active", False):
+                                is_tp_event = True
                         elif event.type == MOUSEBUTTONUP:
                             if getattr(self, "_tp_active", False):
                                 is_tp_event = True
