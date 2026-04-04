@@ -53,14 +53,19 @@ def handle_vol():
                 current = vol.GetMasterVolumeLevelScalar()
                 if data['action'] == 'up':
                     vol.SetMasterVolumeLevelScalar(min(1.0, current + 0.02), None)
+                    vol.SetMute(0, None)
                 elif data['action'] == 'down':
-                    vol.SetMasterVolumeLevelScalar(max(0.0, current - 0.02), None)
+                    new_vol = max(0.0, current - 0.02)
+                    vol.SetMasterVolumeLevelScalar(new_vol, None)
+                    if new_vol == 0.0:
+                        vol.SetMute(0, None)
                 elif data['action'] == 'mute':
                     vol.SetMute(not vol.GetMute(), None)
             else:
                 if 'volume' in data:
                     v = max(0.0, min(1.0, data['volume'] / 100.0))
                     vol.SetMasterVolumeLevelScalar(v, None)
+                    vol.SetMute(0, None)
                 if 'mute' in data:
                     vol.SetMute(1 if data['mute'] else 0, None)
                     
