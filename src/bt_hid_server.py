@@ -774,7 +774,8 @@ class BTKeyboardServer:
                 udx = dx & 0xFF
                 udy = dy & 0xFF
                 
-                press = bytes([HID_INPUT, REPORT_ID_MOUSE, buttons & 0x07, udx, udy])
+                uwheel = wheel & 0xFF
+                press = bytes([HID_INPUT, REPORT_ID_MOUSE, buttons & 0x07, udx, udy, uwheel])
                 intr.send(press)
                 
                 # If buttons let go, immediately send releasing of buttons? Wait, a mouse movement could just be dx/dy, without clearing buttons!
