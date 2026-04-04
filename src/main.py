@@ -2670,9 +2670,16 @@ class ArcadeControlApp:
                     self._fingers[event.finger_id] = (int(event.x * self.width), int(event.y * self.height))
                     # Trigger scroll if 2 fingers
                     if len(self._fingers) >= 2 and getattr(self, "bt_connected", False) and self.current_tab == 'raton':
-                        # dy is relative, use it to send wheel
-                        wheel_val = int(-event.dy * 150)  # scale dy
+                        # Acumulamos el desplazamiento para lograr un scroll suave
+                        if not hasattr(self, '_wheel_acc'):
+                            self._wheel_acc = 0.0
+                        
+                        # Multiplicador ajustado (ej. 30 en vez de 150)
+                        self._wheel_acc += -event.dy * 30  
+                        wheel_val = int(self._wheel_acc)
+                        
                         if wheel_val != 0:
+                            self._wheel_acc -= wheel_val
                             import bluetooth_hid
                             try:
                                 with bluetooth_hid.USBHID() as hid:
