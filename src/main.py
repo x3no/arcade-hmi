@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """
 Arcade Control Panel - Main Application
+import concurrent.futures
 Touchscreen interface for arcade machine control
 """
 
@@ -396,17 +397,24 @@ class MediaController:
     def __init__(self, rect, app):
         self.rect = pygame.Rect(rect)
         self._app = app
-        cx = self.rect.centerx
-        by = self.rect.bottom - _s(35)
-        # Prev, Play/Pause, Next rects
-        bw = _s(50)
-        self.btn_prev  = pygame.Rect(cx - bw - _s(20), by - bw//2, bw, bw)
-        self.btn_play  = pygame.Rect(cx - bw//2,       by - bw//2, bw, bw)
-        self.btn_next  = pygame.Rect(cx + bw//2 + _s(20), by - bw//2, bw, bw)
         
-        self.bar_y = self.rect.y + _s(40)
-        self.bar_rect = pygame.Rect(self.rect.x + _s(60), self.bar_y, self.rect.width - _s(120), _s(12))
+        btn_w = _s(100)
+        gap = _s(10)
+        # Prev a la izquierda
+        self.btn_prev = pygame.Rect(self.rect.left, self.rect.top, btn_w, self.rect.height)
+        # Next a la derecha
+        self.btn_next = pygame.Rect(self.rect.right - btn_w, self.rect.top, btn_w, self.rect.height)
+        # Play/Pause a la izquierda de Next
+        self.btn_play = pygame.Rect(self.btn_next.left - btn_w - gap, self.rect.top, btn_w, self.rect.height)
+        
+        # Central area for the track bar and info
+        self.content_rect = pygame.Rect(self.btn_prev.right + gap, self.rect.top, self.btn_play.left - self.btn_prev.right - gap*2, self.rect.height)
+        self.bar_y = self.content_rect.centery + _s(25)
+        self.bar_rect = pygame.Rect(self.content_rect.left + _s(20), self.bar_y, self.content_rect.width - _s(40), _s(12))
         self.dragging = False
+        self.btn_prev_down = False
+        self.btn_play_down = False
+        self.btn_next_down = False
 
     def handle_event(self, event):
         info = self._app.media_info
@@ -415,30 +423,55 @@ class MediaController:
 
         if event.type == MOUSEBUTTONDOWN:
             if self.bar_rect.collidepoint(event.pos) or (
-                self.rect.left < event.pos[0] < self.rect.right and 
-                self.bar_y - _s(20) < event.pos[1] < self.bar_y + _s(20)
+                self.content_rect.left < event.pos[0] < self.content_rect.right and 
+                self.bar_y - _s(30) < event.pos[1] < self.bar_y + _s(30)
             ):
                 self.dragging = True
-                self._update_pos(event.pos[0])
+                self._update_pos(event.pos[0], send=False)
                 return True
             elif self.btn_prev.collidepoint(event.pos):
-                self._send_action("prev")
+                self.btn_prev_down = True
+                self._app._main_cache_dirty = True
                 return True
             elif self.btn_play.collidepoint(event.pos):
-                self._send_action("toggle")
+                self.btn_play_down = True
+                self._app._main_cache_dirty = True
                 return True
             elif self.btn_next.collidepoint(event.pos):
-                self._send_action("next")
+                self.btn_next_down = True
+                self._app._main_cache_dirty = True
                 return True
         elif event.type == MOUSEMOTION and self.dragging:
-            self._update_pos(event.pos[0])
+            self._update_pos(event.pos[0], send=False)
             return True
-        elif event.type == MOUSEBUTTONUP and self.dragging:
-            self.dragging = False
-            return True
+        elif event.type == MOUSEBUTTONUP:
+            dirty = False
+            if self.dragging:
+                self.dragging = False
+                self._update_pos(event.pos[0], send=True)
+                return True
+                
+            if self.btn_prev_down:
+                self.btn_prev_down = False
+                dirty = True
+                if self.btn_prev.collidepoint(event.pos):
+                    self._send_action("prev")
+            if self.btn_play_down:
+                self.btn_play_down = False
+                dirty = True
+                if self.btn_play.collidepoint(event.pos):
+                    self._send_action("toggle")
+            if self.btn_next_down:
+                self.btn_next_down = False
+                dirty = True
+                if self.btn_next.collidepoint(event.pos):
+                    self._send_action("next")
+            if dirty:
+                self._app._main_cache_dirty = True
+                return True
         return False
 
-    def _update_pos(self, mx):
+    def _update_pos(self, mx, send=True):
         info = self._app.media_info
         w = max(1, self.bar_rect.width)
         rel_x = max(0, min(w, mx - self.bar_rect.x))
@@ -447,11 +480,25 @@ class MediaController:
         info['position'] = new_pos
         import time
         self._app.media_last_update = time.time()
-        self._send_action("seek", new_pos)
+        self._app.media_ignore_sync_until = time.time() + 4.0
+        if send:
+            self._send_action("seek", new_pos)
         self._app._main_cache_dirty = True
 
     def _send_action(self, action, value=None):
         if not self._app.lan_pc_ip: return
+        
+        info = self._app.media_info
+        if info:
+            import time
+            self._app.media_ignore_sync_until = time.time() + 4.0
+            if action == 'toggle':
+                info['paused'] = not info.get('paused', False)
+                self._app._main_cache_dirty = True
+            elif action in ('next', 'prev'):
+                info['position'] = 0
+                self._app._main_cache_dirty = True
+                
         import threading, json, urllib.request
         def _req():
             try:
@@ -463,14 +510,29 @@ class MediaController:
         threading.Thread(target=_req, daemon=True).start()
         
     def draw(self, surface, font, font_icon):
-        pygame.draw.rect(surface, (40, 40, 40), self.rect, border_radius=_s(8))
-        pygame.draw.rect(surface, C_GRAY, self.rect, _s(2), border_radius=_s(8))
-        
         info = self._app.media_info
-        if not info.get('playing'):
-            txt = _rt(font, "No hay ninguna canción sonando", C_GRAY)
-            surface.blit(txt, txt.get_rect(center=self.rect.center))
+        if not info or not info.get('playing'):
             return
+
+        # Center info background
+        pygame.draw.rect(surface, (40, 40, 40), self.content_rect, border_radius=_s(8))
+        
+        # Previous track button (left notch)
+        c = _s(30)
+        lb = self.btn_prev
+        color_prev = C_ORANGE if getattr(self, 'btn_prev_down', False) else C_BTN
+        pts_lb = [(lb.left, lb.top), (lb.right, lb.top), (lb.right, lb.bottom), (lb.left + c, lb.bottom), (lb.left, lb.bottom - c)]
+        pygame.draw.polygon(surface, color_prev, pts_lb)
+
+        # Next track button (right notch)
+        rb = self.btn_next
+        color_next = C_ORANGE if getattr(self, 'btn_next_down', False) else C_BTN
+        pts_rb = [(rb.left, rb.top), (rb.right, rb.top), (rb.right, rb.bottom - c), (rb.right - c, rb.bottom), (rb.left, rb.bottom)]
+        pygame.draw.polygon(surface, color_next, pts_rb)
+
+        # Play/Pause button (no notch)
+        color_play = C_ORANGE if getattr(self, 'btn_play_down', False) else C_BTN
+        pygame.draw.rect(surface, color_play, self.btn_play)
             
         import time
         dur = info.get('duration', 0)
@@ -486,7 +548,8 @@ class MediaController:
         text = f"{art} - {song}" if art else song
         if len(text) > 40: text = text[:37] + "..."
         txt = _rt(font, text, C_WHITE)
-        surface.blit(txt, txt.get_rect(centerx=self.rect.centerx, bottom=self.bar_y - _s(12)))
+        txt_rect = txt.get_rect(centerx=self.content_rect.centerx, bottom=self.bar_y - _s(25))
+        surface.blit(txt, txt_rect)
         
         # Track Bar
         pygame.draw.rect(surface, (70, 70, 70), self.bar_rect, border_radius=_s(4))
@@ -500,8 +563,8 @@ class MediaController:
         d_m, d_s = divmod(dur, 60)
         t_pos = _rt(font, f"{s_m}:{s_s:02d}", C_GRAY)
         t_dur = _rt(font, f"{d_m}:{d_s:02d}", C_GRAY)
-        surface.blit(t_pos, t_pos.get_rect(midright=(self.bar_rect.left - _s(8), self.bar_rect.centery)))
-        surface.blit(t_dur, t_dur.get_rect(midleft=(self.bar_rect.right + _s(8), self.bar_rect.centery)))
+        surface.blit(t_pos, t_pos.get_rect(midleft=(self.content_rect.left + _s(20), txt_rect.centery)))
+        surface.blit(t_dur, t_dur.get_rect(midright=(self.content_rect.right - _s(20), txt_rect.centery)))
 
         # Buttons
         icon_prev = font_icon.render('\ue045', True, C_WHITE) # skip_previous
@@ -937,7 +1000,7 @@ class ArcadeControlApp:
         h_part = self.height - CONT_Y_P - CLOCK_H
 
         # ── Media Controller y Volume slider (sonido tab only) ─────────────────
-        MEDIA_H = _s(110)
+        MEDIA_H = _s(220)
         SLIDER_H = _s(120)  # slightly reduced to fit media
         h_sonido  = h_norm - SLIDER_H - MEDIA_H - _s(20)
         
@@ -1672,13 +1735,26 @@ class ArcadeControlApp:
                                 with urllib.request.urlopen(req_spot, timeout=1.0) as resp:
                                     sdata = json.loads(resp.read().decode())
                                     if not sdata.get('error'):
+                                        import time
+                                        now = time.time()
+                                        
+                                        srv_pos = sdata.get('position', 0)
+                                        local_pos = self.media_info.get('position', 0)
+                                        is_playing = self.media_info.get('playing') and not self.media_info.get('paused')
+                                        if is_playing:
+                                            local_pos += int(now - getattr(self, 'media_last_update', now))
+                                            
+                                        ignore = getattr(self, 'media_ignore_sync_until', 0) > now
+                                        
+                                        if (ignore or abs(local_pos - srv_pos) < 4) and self.media_info.get('song') == sdata.get('song'):
+                                            sdata['position'] = min(local_pos, sdata.get('duration', 0))
+
                                         # Only dirty cache if playstate or song changes
                                         if (self.media_info.get('playing') != sdata.get('playing') or 
                                             self.media_info.get('song') != sdata.get('song')):
                                             self._main_cache_dirty = True
                                         self.media_info = sdata
-                                        import time
-                                        self.media_last_update = time.time()
+                                        self.media_last_update = now
                             except Exception:
                                 pass
 
