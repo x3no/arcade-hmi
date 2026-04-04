@@ -530,9 +530,11 @@ class MediaController:
         pts_rb = [(rb.left, rb.top), (rb.right, rb.top), (rb.right, rb.bottom - c), (rb.right - c, rb.bottom), (rb.left, rb.bottom)]
         pygame.draw.polygon(surface, color_next, pts_rb)
 
-        # Play/Pause button (no notch)
+        # Play/Pause button (right notch)
+        pb = self.btn_play
         color_play = C_ORANGE if getattr(self, 'btn_play_down', False) else C_BTN
-        pygame.draw.rect(surface, color_play, self.btn_play)
+        pts_pb = [(pb.left, pb.top), (pb.right, pb.top), (pb.right, pb.bottom - c), (pb.right - c, pb.bottom), (pb.left, pb.bottom)]
+        pygame.draw.polygon(surface, color_play, pts_pb)
             
         import time
         dur = info.get('duration', 0)
@@ -567,9 +569,10 @@ class MediaController:
         surface.blit(t_dur, t_dur.get_rect(midright=(self.content_rect.right - _s(20), txt_rect.centery)))
 
         # Buttons
-        icon_prev = font_icon.render('\ue045', True, C_WHITE) # skip_previous
-        icon_play = font_icon.render('\ue034' if not info.get('paused') else '\ue037', True, C_WHITE)
-        icon_next = font_icon.render('\ue044', True, C_WHITE) # skip_next
+        font_icon_large = self._app.font_icon_action
+        icon_prev = font_icon_large.render('\ue045', True, C_WHITE) # skip_previous
+        icon_play = font_icon_large.render('\ue034' if not info.get('paused') else '\ue037', True, C_WHITE)
+        icon_next = font_icon_large.render('\ue044', True, C_WHITE) # skip_next
         
         surface.blit(icon_prev, icon_prev.get_rect(center=self.btn_prev.center))
         surface.blit(icon_play, icon_play.get_rect(center=self.btn_play.center))
