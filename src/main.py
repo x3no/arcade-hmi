@@ -589,16 +589,19 @@ class VolumeSlider:
             return False
         if event.type == MOUSEBUTTONDOWN and self.rect.collidepoint(event.pos):
             self._dragging = True
-            self._drag_val = self._vol_from_x(event.pos[0])
-            self._pending_vol = self._drag_val
-            self._user_vol = self._drag_val
+            new_val = self._vol_from_x(event.pos[0])
+            self._drag_val = new_val
+            self._pending_vol = new_val
+            self._user_vol = new_val
             self._app._main_cache_dirty = True
             return True
         if event.type == MOUSEMOTION and self._dragging:
-            self._drag_val = self._vol_from_x(event.pos[0])
-            self._pending_vol = self._drag_val
-            self._user_vol = self._drag_val
-            self._app._main_cache_dirty = True
+            new_val = self._vol_from_x(event.pos[0])
+            if new_val != self._drag_val:
+                self._drag_val = new_val
+                self._pending_vol = new_val
+                self._user_vol = new_val
+                self._app._main_cache_dirty = True
             return True
         if event.type == MOUSEBUTTONUP and self._dragging:
             if self._drag_val is not None:
@@ -1649,20 +1652,20 @@ class ArcadeControlApp:
                             except Exception:
                                 pass
 
-                        # Spotify
+                        # Media
                         if self.current_tab == 'sonido':
                             try:
-                                req_spot = urllib.request.Request(f"http://{self.lan_pc_ip}:5000/spotify", method="GET")
+                                req_spot = urllib.request.Request(f"http://{self.lan_pc_ip}:5000/media", method="GET")
                                 with urllib.request.urlopen(req_spot, timeout=1.0) as resp:
                                     sdata = json.loads(resp.read().decode())
                                     if not sdata.get('error'):
                                         # Only dirty cache if playstate or song changes
-                                        if (self.spotify_info.get('playing') != sdata.get('playing') or 
-                                            self.spotify_info.get('song') != sdata.get('song')):
+                                        if (self.media_info.get('playing') != sdata.get('playing') or 
+                                            self.media_info.get('song') != sdata.get('song')):
                                             self._main_cache_dirty = True
-                                        self.spotify_info = sdata
+                                        self.media_info = sdata
                                         import time
-                                        self.spotify_last_update = time.time()
+                                        self.media_last_update = time.time()
                             except Exception:
                                 pass
 
