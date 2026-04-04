@@ -398,7 +398,7 @@ class MediaController:
         self.rect = pygame.Rect(rect)
         self._app = app
         
-        btn_w = _s(100)
+        btn_w = _s(200)
         gap = _s(10)
         # Prev a la izquierda
         self.btn_prev = pygame.Rect(self.rect.left, self.rect.top, btn_w, self.rect.height)
