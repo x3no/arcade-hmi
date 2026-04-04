@@ -2685,38 +2685,45 @@ class ArcadeControlApp:
                                     
                     # Raton/Touchpad handling
                     if self.current_tab == 'raton' and hasattr(self, '_raton_rect'):
-                        if self._raton_rect.collidepoint(event.pos):
-                            if getattr(self, "bt_connected", False):
-                                try:
-                                    import bluetooth_hid
-                                    with bluetooth_hid.USBHID() as hid:
-                                        if event.type == MOUSEBUTTONDOWN:
-                                            self._tp_active = True
-                                            self._tp_down = pygame.time.get_ticks()
-                                        elif event.type == MOUSEBUTTONUP:
-                                            self._tp_active = False
-                                            down_ticks = getattr(self, "_tp_down", 0)
-                                            if down_ticks and pygame.time.get_ticks() - down_ticks < 300:
-                                                # Short tap -> Click 
-                                                hid.send_mouse(1, 0, 0)
-                                                hid.send_mouse(0, 0, 0)
+                        is_tp_event = False
+                        if event.type == MOUSEBUTTONDOWN and self._raton_rect.collidepoint(event.pos):
+                            self._tp_active = True
+                            self._tp_down = pygame.time.get_ticks()
+                            is_tp_event = True
+                        elif getattr(self, "_tp_active", False):
+                            is_tp_event = True
+                            if event.type == MOUSEBUTTONUP:
+                                self._tp_active = False
+
+                        if is_tp_event and getattr(self, "bt_connected", False):
+                            try:
+                                import bluetooth_hid
+                                with bluetooth_hid.USBHID() as hid:
+                                    if event.type == MOUSEBUTTONUP:
+                                        down_ticks = getattr(self, "_tp_down", 0)
+                                        if down_ticks and pygame.time.get_ticks() - down_ticks < 300:
+                                            # Short tap -> Click 
+                                            hid.send_mouse(1, 0, 0)
+                                            hid.send_mouse(0, 0, 0)
+                                        else:
+                                            # Release explicitly in case it was a long drag
+                                            hid.send_mouse(0, 0, 0)
+                                        self._tp_down = 0
+                                    elif event.type == MOUSEMOTION:
+                                        rx, ry = event.rel if not self._scale_to_display else (
+                                            event.rel[0] * self.width // self._phys_w,
+                                            event.rel[1] * self.height // self._phys_h
+                                        )
+                                        # Allow small jitter without canceling the tap
+                                        if abs(rx) > 2 or abs(ry) > 2:
                                             self._tp_down = 0
-                                        elif event.type == MOUSEMOTION:
-                                            # Solo procesar movimiento si el toque inicial fue dentro del área
-                                            if getattr(self, "_tp_active", False):
-                                                rx, ry = event.rel if not self._scale_to_display else (
-                                                    event.rel[0] * self.width // self._phys_w,
-                                                    event.rel[1] * self.height // self._phys_h
-                                                )
-                                                # Allow small jitter without canceling the tap
-                                                if abs(rx) > 2 or abs(ry) > 2:
-                                                    self._tp_down = 0
-                                                
-                                                if abs(rx) > 0 or abs(ry) > 0:
-                                                    btn1 = 1 if getattr(event, 'buttons', [0])[0] else 0
-                                                    hid.send_mouse(btn1, int(rx*1.5), int(ry*1.5))
-                                except Exception:
-                                    pass
+                                        
+                                        if abs(rx) > 0 or abs(ry) > 0:
+                                            # Ignoramos el estado capacitivo de la pantalla en arrastre,
+                                            # un simple dedo es solo desplazamiento de puntero
+                                            hid.send_mouse(0, int(rx*1.5), int(ry*1.5))
+                            except Exception:
+                                pass
 
                     # Scrollable content (handles all mouse events incl. motion)
                     # On sonido tab, let the volume slider grab touch inside its rect first
