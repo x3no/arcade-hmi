@@ -2281,20 +2281,20 @@ class ArcadeControlApp:
         for btn in self.sonido_btns:
             btn.disabled = not lan_or_bt
 
-        # Mute button reflects current audio state
-        if self.lan_mute:
+        # Mute button reflects current audio state, defaults to SILENCIAR if no LAN
+        if self.lan_connected and self.lan_mute:
             self.mute_btn.text = "DESILENCIAR"
             self.mute_btn.icon = '\ue050'   # volume_up
         else:
             self.mute_btn.text = "SILENCIAR"
             self.mute_btn.icon = '\ue04f'   # volume_off
 
-        # Control de botones de Partida: solo activos si hay juego corriendo
-        is_playing = self.lan_is_game_running
-        for btn in self.partida_general_btns:
-            btn.disabled = not is_playing
-        for btn in self.partida_slot_btns:
-            btn.disabled = not is_playing
+        # Control de botones de Partida y Monedero
+        # Por defecto ya se activan/desactivan arriba según self.bt_connected.
+        # Si la LAN está conectada y dice que NO hay juego, los desactivamos.
+        if self.lan_connected and not self.lan_is_game_running:
+            for btn in self.partida_general_btns + self.partida_slot_btns + self.partida_monedero_btns:
+                btn.disabled = True
 
         # Botón de Pausar / Reanudar
         if getattr(self, "lan_is_game_paused", False):
