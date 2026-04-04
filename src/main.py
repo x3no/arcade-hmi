@@ -392,7 +392,7 @@ class ScrollMenu:
 
 
 class MediaController:
-    """Spotify media controller widget."""
+    """Media controller widget."""
     def __init__(self, rect, app):
         self.rect = pygame.Rect(rect)
         self._app = app
@@ -409,8 +409,8 @@ class MediaController:
         self.dragging = False
 
     def handle_event(self, event):
-        info = self._app.spotify_info
-        if not info or not info.get('duration'):
+        info = self._app.media_info
+        if not info or not info.get('playing'):
             return False
 
         if event.type == MOUSEBUTTONDOWN:
@@ -439,14 +439,14 @@ class MediaController:
         return False
 
     def _update_pos(self, mx):
-        info = self._app.spotify_info
+        info = self._app.media_info
         w = max(1, self.bar_rect.width)
         rel_x = max(0, min(w, mx - self.bar_rect.x))
         new_pos = int((rel_x / w) * info.get('duration', 0))
         # Optimistic update locally
         info['position'] = new_pos
         import time
-        self._app.spotify_last_update = time.time()
+        self._app.media_last_update = time.time()
         self._send_action("seek", new_pos)
         self._app._main_cache_dirty = True
 
@@ -456,7 +456,7 @@ class MediaController:
         def _req():
             try:
                 data = json.dumps({'action': action, 'value': value}).encode('utf-8')
-                req = urllib.request.Request(f"http://{self._app.lan_pc_ip}:5000/spotify", data=data, headers={'Content-Type': 'application/json'}, method='POST')
+                req = urllib.request.Request(f"http://{self._app.lan_pc_ip}:5000/media", data=data, headers={'Content-Type': 'application/json'}, method='POST')
                 with urllib.request.urlopen(req, timeout=1.0) as resp:
                     pass
             except Exception: pass
@@ -466,9 +466,9 @@ class MediaController:
         pygame.draw.rect(surface, (40, 40, 40), self.rect, border_radius=_s(8))
         pygame.draw.rect(surface, C_GRAY, self.rect, _s(2), border_radius=_s(8))
         
-        info = self._app.spotify_info
-        if not info.get('duration'):
-            txt = _rt(font, "Spotify no activo", C_GRAY)
+        info = self._app.media_info
+        if not info.get('playing'):
+            txt = _rt(font, "No hay ninguna canción sonando", C_GRAY)
             surface.blit(txt, txt.get_rect(center=self.rect.center))
             return
             
@@ -476,8 +476,8 @@ class MediaController:
         dur = info.get('duration', 0)
         # extrapolate position since last poll
         pos = info.get('position', 0)
-        if info.get('playing') and not info.get('paused'):
-            pos += int(time.time() - self._app.spotify_last_update)
+        if info.get('playing') and not info.get('paused') and dur > 0:
+            pos += int(time.time() - self._app.media_last_update)
             pos = min(dur, pos)
 
         # Title
@@ -822,9 +822,9 @@ class ArcadeControlApp:
         self.lan_game_image_bytes = None  # Buffer crudo para convertir en thread principal
         self.lan_game_image_surf = None   # Pygame surface de la captura en vivo
 
-        # Spotify status
-        self.spotify_info = {'playing': False, 'paused': False, 'artist': None, 'song': None, 'position': 0, 'duration': 0}
-        self.spotify_last_update = 0
+        # Media status
+        self.media_info = {'playing': False, 'paused': False, 'artist': None, 'song': None, 'position': 0, 'duration': 0}
+        self.media_last_update = 0
         
         self._start_bt_status_poller()
         self._start_wifi_poller()
@@ -1031,7 +1031,7 @@ class ArcadeControlApp:
 
     def switch_tab(self, tab_id):
         self.current_tab = tab_id
-        tab_ids = ['sistema', 'sonido', 'partida', 'monedero']
+        tab_ids = ['sistema', 'sonido', 'partida', 'raton', 'monedero']
         for btn, tid in zip(self.tab_buttons, tab_ids):
             btn.active = (tid == tab_id)
         self._main_cache_dirty = True
@@ -2688,26 +2688,30 @@ class ArcadeControlApp:
                                     import bluetooth_hid
                                     with bluetooth_hid.USBHID() as hid:
                                         if event.type == MOUSEBUTTONDOWN:
+                                            self._tp_active = True
                                             self._tp_down = pygame.time.get_ticks()
                                         elif event.type == MOUSEBUTTONUP:
+                                            self._tp_active = False
                                             down_ticks = getattr(self, "_tp_down", 0)
                                             if down_ticks and pygame.time.get_ticks() - down_ticks < 300:
                                                 # Short tap -> Click 
                                                 hid.send_mouse(1, 0, 0)
                                                 hid.send_mouse(0, 0, 0)
-                                                self._tp_down = 0
+                                            self._tp_down = 0
                                         elif event.type == MOUSEMOTION:
-                                            rx, ry = event.rel if not self._scale_to_display else (
-                                                event.rel[0] * self.width // self._phys_w,
-                                                event.rel[1] * self.height // self._phys_h
-                                            )
-                                            # Allow small jitter without canceling the tap
-                                            if abs(rx) > 2 or abs(ry) > 2:
-                                                self._tp_down = 0
-                                            
-                                            if abs(rx) > 0 or abs(ry) > 0:
-                                                btn1 = 1 if getattr(event, 'buttons', [0])[0] else 0
-                                                hid.send_mouse(btn1, int(rx*1.5), int(ry*1.5))
+                                            # Solo procesar movimiento si el toque inicial fue dentro del área
+                                            if getattr(self, "_tp_active", False):
+                                                rx, ry = event.rel if not self._scale_to_display else (
+                                                    event.rel[0] * self.width // self._phys_w,
+                                                    event.rel[1] * self.height // self._phys_h
+                                                )
+                                                # Allow small jitter without canceling the tap
+                                                if abs(rx) > 2 or abs(ry) > 2:
+                                                    self._tp_down = 0
+                                                
+                                                if abs(rx) > 0 or abs(ry) > 0:
+                                                    btn1 = 1 if getattr(event, 'buttons', [0])[0] else 0
+                                                    hid.send_mouse(btn1, int(rx*1.5), int(ry*1.5))
                                 except Exception:
                                     pass
 
