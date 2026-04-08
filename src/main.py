@@ -789,7 +789,7 @@ class ArcadeControlApp:
                 self._scale_to_display = True
                 print(f"Render: {self.width}x{self.height}  display: {disp_w}x{disp_h}  (SW scale)")
         else:
-            flags = 0
+            flags = pygame.FULLSCREEN | pygame.DOUBLEBUF if os.environ.get('ARCADE_FULLSCREEN') == '1' else 0
             self.screen = pygame.display.set_mode((self.width, self.height), flags, vsync=1)
             self._display_surf   = self.screen
             self._scale_to_display = False
