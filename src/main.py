@@ -27,8 +27,9 @@ from keyboard_mapper import ArcadeKeyMapper
 # Detect if running on a Raspberry Pi
 IS_PI = platform.machine() in ('aarch64', 'armv7l', 'armv6l')
 
-# Configure SDL to use X11
-os.environ['SDL_VIDEODRIVER'] = 'x11'
+# Configure SDL to use X11 on Linux
+if platform.system() == 'Linux':
+    os.environ['SDL_VIDEODRIVER'] = 'x11'
 if IS_PI:
     os.environ['SDL_NOMOUSE'] = '1'
     os.environ.setdefault('SDL_RENDER_VSYNC', '1')
