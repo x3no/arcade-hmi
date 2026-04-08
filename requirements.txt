@@ -3,5 +3,8 @@
 #   sudo apt-get install python3-pygame python3-rpi.gpio
 pygame>=2.0.0
 
+# Timezone data is required on Windows for zoneinfo
+tzdata; sys_platform == "win32"
+
 # Raspberry Pi specific (only needed on Pi)
 RPi.GPIO>=0.7.0; platform_machine == "aarch64" or platform_machine == "armv7l"
